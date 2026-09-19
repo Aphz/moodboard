@@ -26,12 +26,6 @@ export default defineConfig({
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
         ],
-        share_target: {
-          action: './share',
-          method: 'POST',
-          enctype: 'multipart/form-data',
-          params: { title: 'title', text: 'text', url: 'url', files: [{ name: 'images', accept: ['image/*'] }] }
-        }
       } as any,
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
