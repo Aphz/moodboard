@@ -14,8 +14,10 @@ IndexedDB, en el dispositivo.
 |---|---|
 | ![Tablero organizado en iPad](docs/screenshots/ipad-arranged.png) | ![Nota sobre una imagen](docs/screenshots/ipad-note.png) |
 | Organizar: óptimo sobre una selección en iPad | Nota hija de una imagen, con markdown ligero |
-| ![Menú contextual](docs/screenshots/ipad-context.png) | ![Lienzo vacío en iPhone](docs/screenshots/iphone-empty.png) |
-| Menú contextual de selección (pulsación larga) | Lienzo vacío en iPhone |
+| ![Menú contextual](docs/screenshots/ipad-context.png) | ![Recorte con gizmo](docs/screenshots/ipad-crop.png) |
+| Menú contextual de selección (pulsación larga) | Recorte con gizmo y bloqueo de proporción |
+| ![Lienzo vacío en iPhone](docs/screenshots/iphone-empty.png) | ![Tablero en iPhone](docs/screenshots/iphone-board.png) |
+| Lienzo vacío en iPhone | El mismo tablero en iPhone |
 
 ## Stack y por qué
 

@@ -267,13 +267,11 @@ export class App {
   applyPlacements(pl: Placement[]) {
     if (pl.length === 0) return;
     this.store.commit(() => {
-      const byId = new Map(pl.map((p) => [p.id, p]));
-      // mover también descendientes con el mismo desplazamiento de su raíz
       for (const p of pl) {
         const it = this.store.get(p.id);
         if (!it) continue;
-        const dx = p.x - it.x, dy = p.y - it.y;
         const k = p.scale !== undefined && it.scale ? p.scale / it.scale : 1;
+        const origin = { x: it.x, y: it.y };
         const desc = descendantsOf(this.store.scene, it.id);
         this.store.update([it.id, ...desc.map((d) => d.id)], (x) => {
           if (x.id === it.id) {
@@ -282,15 +280,12 @@ export class App {
             if (p.scale !== undefined) x.scale = p.scale;
           } else {
             // hijos: trasladar y escalar respecto al centro de la raíz
-            x.x = p.x + (x.x - it.x) * k;
-            x.y = p.y + (x.y - it.y) * k;
+            x.x = p.x + (x.x - origin.x) * k;
+            x.y = p.y + (x.y - origin.y) * k;
             if (k !== 1) x.scale *= k;
           }
-          void dx;
-          void dy;
         });
       }
-      void byId;
     });
   }
 
@@ -582,7 +577,9 @@ export class App {
 
   private bindLifecycle() {
     const flush = () => {
-      if (this.store.dirty) void this.save(true);
+      // guardar siempre: conserva también el encuadre (viewport) actual
+      this.store.dirty = true;
+      void this.save(true);
     };
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') flush();
@@ -711,7 +708,7 @@ export class App {
         }
       },
       { id: 'copy_as_image', title: 'cmd_copy_as_image', category: 'edit', icon: 'image', shortcut: 'Mod+Shift+C', enabled: hasSel, run: () => this.copySelectionAsImage(false) },
-      { id: 'paste', title: 'cmd_paste', category: 'edit', icon: 'clipboard', shortcut: 'Mod+V', run: () => this.pasteFromSystem() },
+      { id: 'paste', title: 'cmd_paste', category: 'edit', icon: 'clipboard', run: () => this.pasteFromSystem() },
       { id: 'duplicate', title: 'cmd_duplicate', category: 'edit', icon: 'duplicate', shortcut: 'Mod+D', enabled: hasSel, run: () => void duplicateItems(S, this.roots()) },
       {
         id: 'delete', title: 'cmd_delete', category: 'edit', icon: 'trash', shortcut: 'Backspace', enabled: hasSel,

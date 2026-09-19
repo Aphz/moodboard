@@ -186,7 +186,7 @@ Cosas que esta app hace y PureRef no:
 ## Roadmap sugerido
 
 1. **Sincronización con iCloud Drive / Archivos.** Guardar y abrir `.moodboard` desde el proveedor de archivos del sistema con `@capacitor/filesystem`, para que el tablero viva fuera del sandbox de la app.
-2. **Share extension nativa.** Recibir imágenes desde otras apps ("Compartir → Moodboard"). El manifiesto ya declara `share_target`, pero falta la ruta `./share` que reciba el POST; en la versión nativa se resuelve con una share extension de iOS.
+2. **Recibir imágenes compartidas desde otras apps** ("Compartir → Moodboard"). En la PWA se resuelve declarando `share_target` en el manifiesto **y** atendiendo el POST a `./share` desde el service worker (hoy no está ninguna de las dos partes, por eso se quitó del manifiesto). En la versión nativa, con una share extension de iOS más `@capacitor/share`.
 3. **Colaboración.** Escenas compartidas con CRDT sobre el mismo modelo plano de ítems; hoy el modelo ya es serializable y sin referencias cíclicas, así que el cambio es de transporte, no de datos.
 4. **Más tipos de dibujo.** Polilínea, curvas, resaltador, relleno, y borrador por trazo.
 5. **Recorte no rectangular.** Máscara por trazado o recorte con forma, apoyado en el recorte por fracciones que ya existe.
