@@ -125,7 +125,10 @@ desactivados y ni siquiera aparecen en los menús.
 - **IA: etiquetar imágenes seleccionadas** — devuelve etiquetas por imagen y las agrega a `item.tags` en un solo paso de deshacer.
 - **IA: organizar por categorías** — clasifica las imágenes con tus categorías (por defecto *Poses, Texturas, Ropa*) o con las que la IA proponga para el tablero, y las recoloca en bloques con un grupo y un título por categoría. Es la función más barata: miniaturas de 256 px, unos 90 tokens por imagen. Es también el segundo paso de **Importar tablero de Pinterest…**, que trae los pines de un tablero a partir de su enlace (ver [docs/PINTEREST.md](docs/PINTEREST.md)).
 
-Modelo por defecto: `claude-haiku-4-5` (editable en Ajustes). Las llamadas van directo desde
+Antes de cada llamada se elige el modelo (Haiku 4.5 por defecto, el más
+económico); el gasto real aparece al terminar y se acumula en Ajustes. La API
+de Anthropic se paga **aparte de la suscripción de Claude.ai**: los créditos se
+compran en console.anthropic.com → Plans & Billing. Las llamadas van directo desde
 el navegador a `https://api.anthropic.com/v1/messages` con la cabecera
 `anthropic-dangerous-direct-browser-access`; no hay proxy ni servidor intermedio.
 

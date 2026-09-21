@@ -39,7 +39,7 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 |---|---|---|
 | Importar archivos | ✅ | `import_images` `Mod+I` (también desde el botón ＋) |
 | Importar desde URL | ✅ | `import_url`; valida que la respuesta sea `image/*` |
-| Importar un tablero de Pinterest | ✅ | `import_pinterest`: por enlace (tablero, pin o `pin.it`) leyendo la página vía Jina Reader y bajando los originales por wsrv.nl, porque Pinterest no envía CORS; entran los primeros 25-50 pines. Alternativas: arrastre en Split View, Fotos o ZIP. Encadena `ai_organize`. Ver `docs/PINTEREST.md` |
+| Importar un tablero de Pinterest | ✅ | `import_pinterest`: por enlace (tablero, pin o `pin.it`) leyendo la página vía Jina Reader y bajando los originales por wsrv.nl, porque Pinterest no envía CORS. Rejilla de selección antes de descargar (`src/ui/pinPicker.ts`). Sin sesión Pinterest sólo entrega sus primeros 25 pines. Alternativas: arrastre en Split View, Fotos o ZIP. Encadena `ai_organize`. Ver `docs/PINTEREST.md` |
 | Importar un ZIP de imágenes sueltas | ✅ | `inspectZip()`: si el ZIP no trae `scene.json` se importan sus imágenes (ignora `__MACOSX` y ocultos) |
 | Pegar desde el portapapeles | ✅ | `paste` `Mod+V`; imagen, URL o texto (crea nota) |
 | Arrastrar y soltar desde el navegador | ✅ | `dragenter/drop` en `src/app.ts`; archivos, URLs y texto |

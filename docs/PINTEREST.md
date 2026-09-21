@@ -11,13 +11,20 @@ o al usar *Importar desde URL* con uno.
 
 Sirve cualquier enlace de tablero o de pin, incluido el acortador `pin.it`
 que da la app al compartir, y los tableros compartidos por enlace de
-invitación. Detalles que conviene saber:
+invitación. Al leer el tablero aparece una **rejilla con todos los pines
+encontrados**: toca los que no quieras para dejarlos fuera y pulsa
+«Importar N». Sólo se descargan (y luego se clasifican) los que queden
+marcados, así no se gastan datos ni tokens en imágenes que no interesan.
 
-- **Cuántos pines entran.** Pinterest sólo muestra los primeros 25 pines de
-  un tablero sin iniciar sesión, y su RSS público da los 25 más recientes. La
-  app une las dos fuentes, así que un tablero de hasta 40-50 pines suele
-  entrar completo; de uno más grande entra esa parte, y el aviso final dice
-  cuántos de cuántos. Para el resto, las vías de abajo.
+Detalles que conviene saber:
+
+- **Cuántos pines entran.** Pinterest sólo entrega los primeros 25 pines de
+  un tablero a quien no ha iniciado sesión, tanto en la página como en el
+  RSS público. Su API interna de paginación (`BoardFeedResource`) exige
+  sesión y bloquea a los proxys públicos, así que un tablero más grande
+  entra sólo en esa parte; la rejilla lo dice («El tablero tiene 45…»). Para
+  el resto, las vías de abajo. La app nativa (Capacitor) podrá leer el
+  tablero completo con la sesión del usuario.
 - **Calidad.** Se pide el original de cada pin reducido a 1600 px de lado y
   recomprimido en JPEG: sobra para un moodboard y pesa unos 200 KB por pin.
 - **Por dónde pasa.** Pinterest no envía cabeceras CORS, así que una app web
@@ -25,8 +32,9 @@ invitación. Detalles que conviene saber:
   [r.jina.ai](https://r.jina.ai) (Jina Reader) y cada imagen se descarga por
   [wsrv.nl](https://wsrv.nl) (images.weserv.nl), dos servicios públicos y
   gratuitos que sí las envían. Sólo viajan el enlace y las URL públicas de
-  las imágenes; nunca nada de tu cuenta. Si un día alguno deja de responder,
-  el aviso lo dice y quedan las vías de abajo.
+  las imágenes; nunca nada de tu cuenta. El lector limita las consultas
+  anónimas: si responde 401 o 429 la app avisa que está saturado y conviene
+  reintentar más tarde o usar las otras vías.
 - **Privado de verdad.** Un tablero secreto sin enlace de invitación no se
   puede leer (tampoco desde un navegador sin sesión).
 
@@ -58,7 +66,7 @@ abriendo como escena completa.
 ## Paso 2: organizar con IA
 
 **IA: organizar por categorías** (menú ⋯ o menú de selección, con clave API
-configurada en Ajustes):
+configurada en Ajustes). Un único diálogo con todo:
 
 - **Usar mis categorías**: por defecto `Poses, Texturas, Ropa`, editable y
   recordado. Lo que no encaje va a *Otros*.
@@ -66,18 +74,28 @@ configurada en Ajustes):
   3 y 7 categorías cortas adecuadas a lo que ve (por ejemplo *Paleta*,
   *Entorno*, *Tipografía*) y las reutiliza en el resto de lotes.
 - **Crear un grupo por categoría** y **Añadir un título** sobre cada bloque.
+- **Modelo**: Haiku 4.5 por defecto (el más económico), Sonnet 5 u Opus 5.
 
 Resultado: cada categoría queda como un bloque compacto (empaquetado óptimo)
 con su título encima, los bloques se reparten según la proporción de la
 pantalla, cada imagen recibe la categoría como etiqueta y todo el cambio es un
 único paso de deshacer.
 
+Si sólo quieres clasificar una parte, selecciónala en el lienzo antes de
+ejecutar el comando: con dos o más imágenes seleccionadas trabaja sólo sobre
+esas.
+
 ### Costo
 
 Se envían miniaturas de 256 px (≈ 90 tokens por imagen) en lotes de 20 y la
 respuesta es un JSON corto. Con Haiku 4.5, un tablero de 100 imágenes ronda
-los 12 000 tokens de entrada y 2 500 de salida: unos 0,025 US$. El diálogo
-muestra la estimación antes de llamar y el costo real después.
+los 0,025 US$. El gasto real de cada llamada aparece en el aviso del
+resultado y se acumula en Ajustes → Inteligencia artificial.
+
+**La API de Anthropic se paga aparte de la suscripción de Claude.ai.** Tener
+Claude Pro o Max no da crédito de API: los créditos se compran en
+[console.anthropic.com](https://console.anthropic.com) → Plans & Billing. Si
+el saldo está en cero, la app lo dice con esas palabras.
 
 ## Qué no hace (todavía)
 

@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appSettings } from '../src/core/settings';
 import {
+  NO_CREDIT,
   aiAvailable,
   classifyImages,
   describeBoard,
@@ -129,12 +130,25 @@ describe('tagImages', () => {
     await expect(tagImages({ images: [IMG], lang: 'es' })).rejects.toBeInstanceOf(AiError);
   });
 
-  it('lanza AiError con status 429 explicando límite o falta de crédito', async () => {
+  it('lanza AiError con status 429 explicando el límite de peticiones', async () => {
     mockFetch(() => errResponse(429));
     await expect(tagImages({ images: [IMG], lang: 'es' })).rejects.toMatchObject({
       status: 429,
-      message: 'límite de uso o sin crédito en la cuenta de Anthropic'
+      message: expect.stringContaining('límite de peticiones')
     });
+  });
+
+  it('el saldo agotado de la API se explica como cuenta aparte de Claude.ai', async () => {
+    mockFetch(() =>
+      errResponse(400, {
+        error: {
+          message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'
+        }
+      })
+    );
+    await expect(tagImages({ images: [IMG], lang: 'es' })).rejects.toMatchObject({ status: 400, message: NO_CREDIT });
+    expect(NO_CREDIT).toContain('console.anthropic.com');
+    expect(NO_CREDIT).toContain('Claude.ai');
   });
 });
 

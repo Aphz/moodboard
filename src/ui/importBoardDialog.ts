@@ -11,11 +11,12 @@ import type { App } from '../app';
 import { aiAvailable } from '../ai/claude';
 import { onSettingsChange } from '../core/settings';
 import { importBlobs } from '../features/importImages';
-import { downloadPins, fetchBoard, normalizePinterestUrl } from '../features/pinterest';
+import { PinterestError, downloadPins, fetchBoard, normalizePinterestUrl } from '../features/pinterest';
 import { t } from '../i18n';
 import { h, svg } from './dom';
 import { icons } from './icons';
 import { showDialog, toast } from './dialogs';
+import { pickPins } from './pinPicker';
 import { showSettingsDialog } from './settingsDialog';
 
 /** Guía paso a paso en el repositorio. */
@@ -111,30 +112,48 @@ export function showPinterestImport(app: App, initialLink = ''): void {
  */
 export async function importPinterestUrl(app: App, url: string): Promise<void> {
   const tt = toast(t('ui_pin_reading'), { spinner: true });
+  let board;
   try {
-    const board = await fetchBoard(url);
-    tt.update(t('ui_pin_downloading', { done: 0, total: board.pins.length }));
-    const files = await downloadPins(board.pins, {
-      onProgress: (done, total) => tt.update(t('ui_pin_downloading', { done, total }))
-    });
+    board = await fetchBoard(url);
+  } catch (e) {
     tt.close();
+    toast(pinterestErrorMessage(e), { error: true, ms: 7000 });
+    return;
+  }
+  tt.close();
+
+  // el usuario decide qué entra antes de descargar nada grande
+  const chosen = await pickPins(board.pins, { title: board.title, pinCount: board.pinCount });
+  if (!chosen?.length) return;
+
+  const dl = toast(t('ui_pin_downloading', { done: 0, total: chosen.length }), { spinner: true });
+  try {
+    const files = await downloadPins(chosen, {
+      onProgress: (done, total) => dl.update(t('ui_pin_downloading', { done, total }))
+    });
+    dl.close();
     if (!files.length) {
-      toast(t('ui_pin_error'), { error: true });
+      toast(t('ui_pin_err_network'), { error: true });
       return;
     }
     const items = await importBlobs(app.store, files.map((f) => ({ blob: f.blob, name: f.name })), app.viewCenter());
     if (!items.length) return;
     app.gestures.fitSelection();
-    const total = board.pinCount ?? 0;
-    toast(
-      total > items.length
-        ? t('ui_pin_partial', { title: board.title, count: items.length, total })
-        : t('ui_pin_imported', { title: board.title, count: items.length }),
-      { ms: 6000 }
-    );
+    toast(t('ui_pin_imported', { title: board.title, count: items.length }), { ms: 5000 });
     await app.afterImport(items, 2);
   } catch (e) {
-    tt.close();
-    toast(`${t('ui_pin_error')}: ${e instanceof Error ? e.message : String(e)}`, { error: true });
+    dl.close();
+    toast(pinterestErrorMessage(e), { error: true, ms: 7000 });
   }
+}
+
+/** Traduce un fallo de la importación a un mensaje accionable. */
+function pinterestErrorMessage(e: unknown): string {
+  if (e instanceof PinterestError) {
+    if (e.kind === 'reader-busy') return t('ui_pin_err_busy');
+    if (e.kind === 'not-found') return t('ui_pin_err_notfound');
+    if (e.kind === 'no-pins') return t('ui_pin_err_nopins');
+    return t('ui_pin_err_network');
+  }
+  return `${t('ui_pin_error')}: ${e instanceof Error ? e.message : String(e)}`;
 }

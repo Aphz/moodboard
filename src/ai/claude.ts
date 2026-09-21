@@ -75,6 +75,14 @@ export type ContentBlock =
       source: { type: 'base64'; media_type: 'image/jpeg'; data: string };
     };
 
+/**
+ * Mensaje de saldo agotado. La API de Anthropic se paga aparte de la
+ * suscripción de Claude.ai: los créditos se compran en console.anthropic.com.
+ */
+export const NO_CREDIT =
+  'Sin saldo en la API de Anthropic. Es una cuenta aparte de la suscripción de Claude.ai: ' +
+  'compra créditos en console.anthropic.com → Plans & Billing (Billing).';
+
 /** Error de la capa IA; `status` es el código HTTP cuando lo hay. */
 export class AiError extends Error {
   status?: number;
@@ -176,22 +184,32 @@ interface ApiResponse {
 /** Construye el AiError adecuado a partir de una respuesta HTTP fallida. */
 async function errorFromResponse(res: Response): Promise<AiError> {
   if (res.status === 401) return new AiError('clave inválida', 401);
-  if (res.status === 429) {
-    return new AiError('límite de uso o sin crédito en la cuenta de Anthropic', 429);
-  }
   let detail = `error ${res.status}`;
+  let raw = '';
   try {
     const body: unknown = await res.json();
     const msg = (body as { error?: { message?: string } } | null)?.error?.message;
-    if (typeof msg === 'string' && msg) detail = msg;
+    if (typeof msg === 'string' && msg) {
+      raw = msg;
+      detail = msg;
+    }
   } catch {
     try {
       const txt = await res.text();
-      if (txt) detail = txt.slice(0, 300);
+      if (txt) {
+        raw = txt;
+        detail = txt.slice(0, 300);
+      }
     } catch {
       /* cuerpo ilegible: se mantiene el mensaje genérico */
     }
   }
+  // Saldo de la API agotado: es una cuenta distinta de la suscripción de
+  // Claude.ai, así que conviene decirlo con todas sus letras.
+  if (/credit balance is too low|insufficient.*credit/i.test(raw)) {
+    return new AiError(NO_CREDIT, res.status);
+  }
+  if (res.status === 429) return new AiError('límite de peticiones por minuto: espera un momento y reintenta', 429);
   return new AiError(detail, res.status);
 }
 

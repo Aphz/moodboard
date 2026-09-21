@@ -128,6 +128,14 @@ input[type='checkbox'], input[type='radio'] { width: 22px; height: 22px; min-wid
 .dialog label.row { cursor: pointer; }
 .dialog label.row input { flex: none; }
 .dialog label.row span { flex: 1; }
+.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin: 10px 0; max-height: min(46vh, 420px); overflow: auto; padding: 2px; }
+.pin-cell { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: rgba(127, 127, 127, 0.15); border: 2px solid transparent; padding: 0; }
+.pin-cell img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.35; transition: opacity 0.12s ease-out; }
+.pin-cell.on img { opacity: 1; }
+.pin-cell.on { border-color: var(--accent); }
+.pin-cell .pin-mark { position: absolute; right: 5px; bottom: 5px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0, 0, 0, 0.5); border: 1.5px solid rgba(255, 255, 255, 0.7); }
+.pin-cell.on .pin-mark { background: var(--accent); border-color: var(--accent); }
+.pin-cell.on .pin-mark::after { content: ''; position: absolute; left: 5px; top: 8px; width: 8px; height: 4px; border-left: 2px solid #fff; border-bottom: 2px solid #fff; transform: rotate(-45deg); }
 .grid-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .card { background: rgba(127, 127, 127, 0.12); border-radius: 12px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
 .card .thumb { aspect-ratio: 4/3; background: #111 center/cover no-repeat; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); }
