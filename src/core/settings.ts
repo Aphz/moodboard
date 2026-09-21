@@ -64,15 +64,60 @@ export function onSettingsChange(fn: (s: AppSettings) => void): () => void {
   return () => listeners.delete(fn);
 }
 
+/**
+ * Copia de respaldo de la clave API en `localStorage`.
+ *
+ * La clave vive en IndexedDB junto al resto de los ajustes, pero Safari puede
+ * vaciar esa base (o fallar al abrirla) y la clave sólo se ve una vez en la
+ * consola de Anthropic: perderla obliga a crear otra. Este espejo permite
+ * recuperarla. No cambia quién puede leerla: los dos almacenes pertenecen al
+ * mismo origen y nunca salen del dispositivo.
+ */
+const KEY_BACKUP = 'moodboard.aiApiKey';
+
+/** Lee el respaldo; devuelve '' si no hay o si el almacén no está disponible. */
+function readKeyBackup(): string {
+  try {
+    return localStorage.getItem(KEY_BACKUP) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Guarda (o borra) el respaldo. Nunca lanza. */
+function writeKeyBackup(key: string): void {
+  try {
+    if (key) localStorage.setItem(KEY_BACKUP, key);
+    else localStorage.removeItem(KEY_BACKUP);
+  } catch {
+    /* modo privado o almacén lleno: el respaldo es un extra */
+  }
+}
+
 export async function loadAppSettings(): Promise<AppSettings> {
   const saved = await getKV<Partial<AppSettings>>('appSettings', {});
   appSettings = { ...DEFAULT_SETTINGS, ...saved };
+  // si IndexedDB perdió la clave pero queda el respaldo, se restaura
+  if (!appSettings.aiApiKey) {
+    const backup = readKeyBackup();
+    if (backup) {
+      appSettings = { ...appSettings, aiApiKey: backup };
+      try {
+        await setKV('appSettings', appSettings);
+      } catch {
+        /* si tampoco se puede escribir, al menos la sesión actual la tiene */
+      }
+    }
+  } else if (appSettings.aiApiKey !== readKeyBackup()) {
+    writeKeyBackup(appSettings.aiApiKey);
+  }
   for (const l of listeners) l(appSettings);
   return appSettings;
 }
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<void> {
   appSettings = { ...appSettings, ...patch };
+  if (patch.aiApiKey !== undefined) writeKeyBackup(patch.aiApiKey);
   await setKV('appSettings', appSettings);
   for (const l of listeners) l(appSettings);
 }

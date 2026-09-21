@@ -117,8 +117,11 @@ La tabla completa, comparada función por función con PureRef 2.1.x, está en
 ## Funciones IA (opcionales)
 
 Están apagadas por defecto y solo se activan si pegas **tu propia clave API de Anthropic**
-en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store `kv`),
-nunca se sube a ninguna parte y se muestra ofuscada. Sin clave, los comandos IA quedan
+en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store `kv`, con
+copia de respaldo en `localStorage` por si Safari vacía la base), nunca se sube a ninguna
+parte y se muestra ofuscada. Sólo se guarda si tiene forma de clave (`sk-ant-…`): un campo
+vacío o una contraseña autocompletada por iOS no la pisan, y para quitarla hay un botón
+explícito. Sin clave, los comandos IA quedan
 desactivados y ni siquiera aparecen en los menús.
 
 - **IA: describir tablero** — manda miniaturas de hasta 20 imágenes y el texto de las notas, y devuelve una descripción en markdown que puedes insertar como nota.

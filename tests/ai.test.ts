@@ -11,6 +11,7 @@ import { appSettings } from '../src/core/settings';
 import {
   NO_CREDIT,
   aiAvailable,
+  isApiKeyLike,
   classifyImages,
   describeBoard,
   normalizeCategory,
@@ -171,6 +172,16 @@ describe('sin clave API', () => {
 describe('utilidades', () => {
   it('aiAvailable() es true con clave', () => {
     expect(aiAvailable()).toBe(true);
+  });
+
+  it('isApiKeyLike acepta claves reales y rechaza vacíos, ofuscados y contraseñas', () => {
+    expect(isApiKeyLike('sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789')).toBe(true);
+    expect(isApiKeyLike('  sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123  ')).toBe(true);
+    expect(isApiKeyLike('')).toBe(false);
+    expect(isApiKeyLike('   ')).toBe(false);
+    expect(isApiKeyLike('••••••••6789')).toBe(false);
+    expect(isApiKeyLike('MiContraseña123')).toBe(false);
+    expect(isApiKeyLike('sk-ant-corta')).toBe(false);
   });
 
   it('redactKey sólo muestra los últimos 4 caracteres', () => {

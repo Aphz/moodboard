@@ -99,6 +99,17 @@ export function aiAvailable(): boolean {
 }
 
 /** Versión ofuscada de una clave: sólo se muestran los últimos 4 caracteres. */
+/**
+ * ¿Tiene forma de clave de Anthropic? Sirve para no guardar por error una
+ * cadena vacía, el texto ofuscado o una contraseña que iOS haya autocompletado
+ * en el campo: la clave sólo se ve una vez en la consola, así que perderla
+ * obliga a crear otra.
+ */
+export function isApiKeyLike(value: string): boolean {
+  const v = (value ?? '').trim();
+  return /^sk-[A-Za-z0-9_-]{20,}$/.test(v);
+}
+
 export function redactKey(key: string): string {
   const k = key.trim();
   if (!k) return '';

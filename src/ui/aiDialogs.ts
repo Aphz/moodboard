@@ -9,10 +9,11 @@ import { createGroupItem, createNoteItem, type ImageItem, type ItemId } from '..
 import { clustersFromAssignments, layoutByCategory } from '../features/organize';
 import { getLanguage, t } from '../i18n';
 import { h, miniMarkdown } from './dom';
-import { showDialog, toast } from './dialogs';
+import { confirmDialog, showDialog, toast } from './dialogs';
 import {
   aiAvailable,
   classifyImages,
+  isApiKeyLike,
   describeBoard,
   tagImages,
   redactKey,
@@ -431,14 +432,55 @@ export function applyOrganize(
 export function renderAiSettings(): HTMLElement {
   const keyInput = h('input', {
     type: 'password',
-    placeholder: appSettings.aiApiKey ? redactKey(appSettings.aiApiKey) : 'sk-ant-…',
+    placeholder: 'sk-ant-…',
+    // iOS ofrece contraseñas guardadas en cualquier campo de este tipo: con
+    // nombre propio y sin autocompletado deja de proponerlas.
+    name: 'anthropic-api-key',
     autocomplete: 'off',
-    autocapitalize: 'off'
+    autocapitalize: 'off',
+    autocorrect: 'off',
+    spellcheck: 'false',
+    'data-1p-ignore': 'true',
+    'data-lpignore': 'true'
   });
-  keyInput.addEventListener('change', () => {
-    void updateAppSettings({ aiApiKey: keyInput.value.trim() });
+  /** Estado actual: clave guardada (ofuscada) o aviso de que no hay. */
+  const keyState = h('div', { class: 'hint' });
+  const removeBtn = h('button', { class: 'btn small danger' }, t('ui_ai_key_remove'));
+  const syncKeyState = () => {
+    const saved = appSettings.aiApiKey;
+    keyState.textContent = saved ? t('ui_ai_key_saved', { key: redactKey(saved) }) : t('ui_ai_key_none');
+    removeBtn.style.display = saved ? '' : 'none';
+  };
+  syncKeyState();
+
+  /**
+   * Sólo se guarda una clave con forma válida. Nunca se escribe una cadena
+   * vacía: antes bastaba enfocar el campo y salir para perder la clave.
+   */
+  const saveKey = () => {
+    const value = keyInput.value.trim();
+    if (!value) return; // el campo vacío significa «no lo toques»
+    if (!isApiKeyLike(value)) {
+      toast(t('ui_ai_key_invalid'), { error: true });
+      return;
+    }
     keyInput.value = '';
-    keyInput.placeholder = appSettings.aiApiKey ? redactKey(appSettings.aiApiKey) : 'sk-ant-…';
+    void updateAppSettings({ aiApiKey: value }).then(() => {
+      syncKeyState();
+      toast(t('ui_ai_key_saved_ok'));
+    });
+  };
+  keyInput.addEventListener('change', saveKey);
+  keyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveKey();
+    }
+  });
+  removeBtn.addEventListener('click', async () => {
+    if (!(await confirmDialog(t('ui_ai_key_remove_confirm'), { danger: true }))) return;
+    await updateAppSettings({ aiApiKey: '' });
+    syncKeyState();
   });
 
   const price = h('div', { class: 'hint' }, modelPriceLabel(resolveModel()));
@@ -471,7 +513,7 @@ export function renderAiSettings(): HTMLElement {
     h('p', { class: 'hint' }, t('ui_ai_what_organize')),
     h('p', { class: 'hint' }, t('ui_ai_what_similar')),
     h('p', { class: 'hint' }, t('ui_ai_billing_note')),
-    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, h('div', { class: 'hint' }, t('ui_ai_key_hint'))),
+    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, keyState, h('div', { class: 'hint' }, t('ui_ai_key_hint')), h('div', { class: 'row' }, removeBtn)),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), sel, price),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_usage')), usage, h('div', { class: 'row' }, resetBtn)),
     h('p', { class: 'hint' }, t('ui_ai_local_key'))
