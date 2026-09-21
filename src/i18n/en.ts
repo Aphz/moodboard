@@ -46,6 +46,7 @@ export const en: Record<keyof typeof es, string> = {
   cmd_shortcuts: 'Keyboard shortcuts',
   // arrange
   cmd_arrange_optimal: 'Arrange: optimal',
+  cmd_arrange_masonry: 'Arrange: column collage',
   cmd_arrange_grid: 'Arrange: grid',
   cmd_arrange_horizontal: 'Arrange: row',
   cmd_arrange_vertical: 'Arrange: column',
@@ -259,7 +260,7 @@ export const en: Record<keyof typeof es, string> = {
   ui_org_mode_preset: 'Use my categories',
   ui_org_categories_hint: 'Comma separated. Anything that does not fit goes to “Other”.',
   ui_org_group: 'Create one group per category',
-  ui_org_titles: 'Add a title above each category',
+  ui_org_titles: 'Add a fixed title above each category (only needed for exports: the name already appears when you tap the group)',
   ui_org_need_two: 'At least two images are needed to organize',
   ui_org_no_categories: 'Type at least one category or let the AI propose them',
   ui_org_done: '{categories} categories',

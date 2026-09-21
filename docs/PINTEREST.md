@@ -73,13 +73,17 @@ configurada en Ajustes). Un único diálogo con todo:
 - **Que la IA proponga las categorías según este tablero**: la IA elige entre
   3 y 7 categorías cortas adecuadas a lo que ve (por ejemplo *Paleta*,
   *Entorno*, *Tipografía*) y las reutiliza en el resto de lotes.
-- **Crear un grupo por categoría** y **Añadir un título** sobre cada bloque.
+- **Crear un grupo por categoría**. El título fijo viene desmarcado: el nombre
+  de la categoría aparece flotando sobre el grupo al seleccionarlo, y sólo hace
+  falta un rótulo permanente si vas a exportar el tablero como imagen.
 - **Modelo**: Haiku 4.5 por defecto (el más económico), Sonnet 5 u Opus 5.
 
-Resultado: cada categoría queda como un bloque compacto (empaquetado óptimo)
-con su título encima, los bloques se reparten según la proporción de la
-pantalla, cada imagen recibe la categoría como etiqueta y todo el cambio es un
-único paso de deshacer.
+Resultado: un collage de columnas verticales. Todas las imágenes quedan al
+mismo ancho y se apilan en la columna más corta, cada categoría ocupa una
+franja de columnas contiguas y los bloques salen de alto parejo. Cada imagen
+recibe además la categoría como etiqueta, y todo el cambio es un único paso de
+deshacer. Desde ahí se mueve y se ajusta a mano lo que quieras: el mismo
+collage está en el menú de organizar como **Organizar: collage en columnas**.
 
 Si sólo quieres clasificar una parte, selecciónala en el lienzo antes de
 ejecutar el comando: con dos o más imágenes seleccionadas trabaja sólo sobre

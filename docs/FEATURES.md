@@ -121,6 +121,7 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 |---|---|---|
 | Organizar óptimo | ✅ | `arrange_optimal` `Mod+Shift+O`: empaquetado por estanterías, prueba 9 anchos y minimiza área desperdiciada |
 | Organizar en cuadrícula | ✅ | `arrange_grid` `Mod+Shift+G` |
+| Collage en columnas verticales | ➕ | `arrange_masonry` `Mod+Shift+C`: todas las imágenes al mismo ancho, apiladas en la columna más corta («masonry»). No existe en PureRef; es la disposición por defecto de `ai_organize` |
 | Organizar en fila / columna | ✅ | `arrange_horizontal` `Mod+Shift+H`, `arrange_vertical` `Mod+Shift+V` |
 | Organizar aleatorio (2.1.0, `Ctrl+Alt+R`) | ✅ | `arrange_random` `Mod+Alt+R`; PRNG determinista (`mulberry32`) |
 | Usar la proporción de la ventana en todos los métodos (tweak beta5) | ✅ | `viewAspect()` entra como `opts.aspect` en todos los algoritmos |
@@ -178,7 +179,7 @@ Cosas que esta app hace y PureRef no:
 - **Hash perceptual para duplicados y similares.** dHash de 64 bits por imagen (`src/features/phash.ts`): `find_duplicates` selecciona los grupos con similitud ≥ 0,92 y `ai_find_similar` encuentra parecidos ≥ 0,8 al ítem seleccionado. Es local, instantáneo y no usa red ni IA.
 - **Organizar por color.** `arrange_by_color` ordena por tono a partir del color dominante y deja al final lo que no tiene tono (grises, notas, dibujos).
 - **Clave API a prueba de descuidos.** Se guarda en IndexedDB con respaldo en `localStorage` y se restaura sola si Safari vacía la base; sólo se acepta una cadena con forma de clave, así que un campo vacío o una contraseña autocompletada no la borran, y quitarla es un botón con confirmación.
-- **IA opcional con tu propia clave.** `ai_describe` resume el tablero en markdown (y lo inserta como nota si quieres); `ai_tag` etiqueta las imágenes seleccionadas en un solo paso de deshacer; `ai_organize` clasifica las imágenes por categorías (las tuyas o las que proponga la IA) y las recoloca en bloques con grupo y título (`src/features/organize.ts`), también en un solo paso de deshacer. Modelo por defecto `claude-haiku-4-5`, clave guardada solo en el dispositivo.
+- **IA opcional con tu propia clave.** `ai_describe` resume el tablero en markdown (y lo inserta como nota si quieres); `ai_tag` etiqueta las imágenes seleccionadas en un solo paso de deshacer; `ai_organize` clasifica las imágenes por categorías (las tuyas o las que proponga la IA) y las recoloca como collage de columnas, una franja por categoría y con los bloques de alto parejo (`src/features/organize.ts`), también en un solo paso de deshacer. El nombre de la categoría no deja rótulo fijo: aparece flotando sobre el grupo al seleccionarlo. Modelo por defecto `claude-haiku-4-5`, clave guardada solo en el dispositivo.
 - **Apple Pencil con presión.** El grosor del trazo sigue `pointer.pressure`; el dedo mantiene el paneo mientras el lápiz dibuja. Configurable en Ajustes.
 - **Compartir con la hoja nativa de iOS.** Exportar PNG/JPEG o `.moodboard` abre el *share sheet* (`navigator.share` con archivos) para mandarlo a Fotos, Archivos, Mensajes o cualquier app; en escritorio cae a descarga.
 - **PWA offline.** Service worker con Workbox y `autoUpdate`: la app arranca sin conexión, avisa cuando hay versión nueva y pide almacenamiento persistente para que iOS no purgue los datos.

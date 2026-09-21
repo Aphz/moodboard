@@ -308,7 +308,9 @@ function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categor
     const presetR = h('input', { type: 'radio', name: 'org-mode', checked: !appSettings.aiCategoriesAdHoc || undefined });
     const cats = h('input', { type: 'text', value: appSettings.aiCategories, autocapitalize: 'words', placeholder: 'Poses, Texturas, Ropa' });
     const group = h('input', { type: 'checkbox', checked: true });
-    const titles = h('input', { type: 'checkbox', checked: true });
+    // sin marcar: el nombre de la categoría se ve al tocar el grupo, así que
+    // un rótulo fijo sólo hace falta para que salga en la exportación
+    const titles = h('input', { type: 'checkbox' });
     const model = modelSelect(() => undefined);
     const syncCats = () => {
       cats.disabled = adHoc.checked;
@@ -384,6 +386,8 @@ export function applyOrganize(
         if (p) {
           it.x = p.x;
           it.y = p.y;
+          // el collage iguala los anchos, así que trae escala propia
+          if (p.scale !== undefined && p.scale > 0) it.scale = p.scale;
         }
         const cat = assignments[it.id]!.toLowerCase();
         if (!it.tags.some((x) => x.toLowerCase() === cat)) it.tags = [...it.tags, cat];

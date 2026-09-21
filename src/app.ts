@@ -37,6 +37,7 @@ import {
   arrangeByColor,
   arrangeColumn,
   arrangeGrid,
+  arrangeMasonry,
   arrangeOptimal,
   arrangeRandom,
   arrangeRow,
@@ -800,6 +801,7 @@ export class App {
       { id: 'shortcuts', title: 'cmd_shortcuts', category: 'view', icon: 'keyboard', shortcut: 'Mod+/', run: () => showShortcutsDialog() },
       // organizar
       { id: 'arrange_optimal', title: 'cmd_arrange_optimal', category: 'arrange', icon: 'arrange', shortcut: 'Mod+Shift+O', enabled: multi, run: () => this.arrangeWith((i) => arrangeOptimal(i, this.arrangeOpts())) },
+      { id: 'arrange_masonry', title: 'cmd_arrange_masonry', category: 'arrange', icon: 'columns', shortcut: 'Mod+Shift+C', enabled: multi, run: () => this.arrangeWith((i) => arrangeMasonry(i, this.arrangeOpts())) },
       { id: 'arrange_grid', title: 'cmd_arrange_grid', category: 'arrange', icon: 'grid', shortcut: 'Mod+Shift+G', enabled: multi, run: () => this.arrangeWith((i) => arrangeGrid(i, this.arrangeOpts())) },
       { id: 'arrange_horizontal', title: 'cmd_arrange_horizontal', category: 'arrange', shortcut: 'Mod+Shift+H', enabled: multi, run: () => this.arrangeWith((i) => arrangeRow(i, this.arrangeOpts())) },
       { id: 'arrange_vertical', title: 'cmd_arrange_vertical', category: 'arrange', shortcut: 'Mod+Shift+V', enabled: multi, run: () => this.arrangeWith((i) => arrangeColumn(i, this.arrangeOpts())) },

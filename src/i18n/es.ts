@@ -44,6 +44,7 @@ export const es = {
   cmd_shortcuts: 'Atajos de teclado',
   // organizar
   cmd_arrange_optimal: 'Organizar: óptimo',
+  cmd_arrange_masonry: 'Organizar: collage en columnas',
   cmd_arrange_grid: 'Organizar: cuadrícula',
   cmd_arrange_horizontal: 'Organizar: fila',
   cmd_arrange_vertical: 'Organizar: columna',
@@ -257,7 +258,7 @@ export const es = {
   ui_org_mode_preset: 'Usar mis categorías',
   ui_org_categories_hint: 'Separadas por comas. Lo que no encaje va a «Otros».',
   ui_org_group: 'Crear un grupo por categoría',
-  ui_org_titles: 'Añadir un título sobre cada categoría',
+  ui_org_titles: 'Añadir un título fijo sobre cada categoría (sólo hace falta para exportar: el nombre ya aparece al tocar el grupo)',
   ui_org_need_two: 'Hacen falta al menos dos imágenes para organizar',
   ui_org_no_categories: 'Escribe al menos una categoría o deja que la IA las proponga',
   ui_org_done: '{categories} categorías',

@@ -180,6 +180,7 @@ export class Toolbar {
     const entries: MenuEntry[] = [
       { header: t('ui_arrange') },
       this.entry('arrange_optimal'),
+      this.entry('arrange_masonry'),
       this.entry('arrange_grid'),
       this.entry('arrange_horizontal'),
       this.entry('arrange_vertical'),
@@ -307,6 +308,7 @@ export class Toolbar {
       this.entry('select_all'),
       this.entry('zoom_fit'),
       this.entry('arrange_optimal'),
+      this.entry('arrange_masonry'),
       { sep: true },
       this.entry('toggle_grid', { checked: S.scene.settings.grid.enabled }),
       this.entry('canvas_color'),

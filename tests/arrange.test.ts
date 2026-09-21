@@ -14,6 +14,7 @@ import {
 } from '../src/core/model';
 import {
   arrangeOptimal,
+  arrangeMasonry,
   arrangeGrid,
   arrangeRow,
   arrangeColumn,
@@ -284,5 +285,64 @@ describe('ayudas', () => {
     expect(hueOfHex('#ffff00')).toBe(60);
     expect(hueOfHex('#808080')).toBeNull();
     expect(hueOfHex('no-es-color')).toBeNull();
+  });
+});
+
+describe('arrangeMasonry', () => {
+  const items = [
+    createImageItem('b', 200, 300, { id: 'a', x: 0, y: 0 }),
+    createImageItem('b', 400, 200, { id: 'b', x: 10, y: 10 }),
+    createImageItem('b', 200, 200, { id: 'c', x: 20, y: 20 }),
+    createImageItem('b', 300, 900, { id: 'd', x: 30, y: 30 }),
+    createImageItem('b', 200, 100, { id: 'e', x: 40, y: 40 })
+  ];
+  const boxOf = (it: Item, p: Placement): Rect => itemBounds({ ...it, x: p.x, y: p.y, scale: p.scale ?? it.scale });
+  const byId = new Map(items.map((i) => [i.id, i]));
+
+  it('deja todas las imágenes con el mismo ancho y su proporción intacta', () => {
+    const pl = arrangeMasonry(items, { padding: 10, aspect: 1.5, columns: 2 });
+    expect(pl).toHaveLength(items.length);
+    const boxes = pl.map((p) => boxOf(byId.get(p.id)!, p));
+    for (const b of boxes) expect(b.w).toBeCloseTo(boxes[0]!.w, 6);
+    for (const p of pl) {
+      const it = byId.get(p.id)!;
+      const b = boxOf(it, p);
+      expect(b.h / b.w).toBeCloseTo(it.h / it.w, 6);
+    }
+  });
+
+  it('no deja solapes y respeta el número de columnas pedido', () => {
+    const pl = arrangeMasonry(items, { padding: 12, aspect: 1, columns: 3 });
+    const boxes = pl.map((p) => boxOf(byId.get(p.id)!, p));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) expect(rectsIntersect(boxes[i]!, boxes[j]!)).toBe(false);
+    }
+    const lefts = new Set(boxes.map((b) => Math.round(b.x)));
+    expect(lefts.size).toBe(3);
+  });
+
+  it('apila en la columna más corta: la imagen muy alta no recibe la siguiente', () => {
+    const tall = [
+      createImageItem('b', 200, 1000, { id: 'alta', x: 0, y: 0 }),
+      createImageItem('b', 200, 100, { id: 'baja', x: 0, y: 0 }),
+      createImageItem('b', 200, 100, { id: 'tercera', x: 0, y: 0 })
+    ];
+    const pl = arrangeMasonry(tall, { padding: 10, aspect: 1, columns: 2 });
+    const at = (id: ItemId) => pl.find((p) => p.id === id)!;
+    // «alta» abre la columna 0 y «baja» la 1; la tercera va sobre «baja», no bajo «alta»
+    expect(at('tercera').x).toBeCloseTo(at('baja').x, 6);
+    expect(at('tercera').y).toBeGreaterThan(at('baja').y);
+  });
+
+  it('mantiene el conjunto centrado donde estaba', () => {
+    const before = unionRects(items.map((i) => itemBounds(i)))!;
+    const pl = arrangeMasonry(items, { padding: 10, aspect: 1.5 });
+    const after = unionRects(pl.map((p) => boxOf(byId.get(p.id)!, p)))!;
+    expect(after.x + after.w / 2).toBeCloseTo(before.x + before.w / 2, 6);
+    expect(after.y + after.h / 2).toBeCloseTo(before.y + before.h / 2, 6);
+  });
+
+  it('sin ítems devuelve una lista vacía', () => {
+    expect(arrangeMasonry([], { padding: 10, aspect: 1 })).toEqual([]);
   });
 });

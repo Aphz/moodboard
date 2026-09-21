@@ -198,6 +198,117 @@ export function arrangeOptimal(items: Item[], opts: ArrangeOptions): Placement[]
   return finish(best, target);
 }
 
+/** Caja ya colocada por el empaquetado en columnas, en coordenadas locales. */
+export interface MasonryBox {
+  id: ItemId;
+  left: number;
+  top: number;
+  w: number;
+  h: number;
+  /** Escala absoluta que debe quedar en el ítem para ocupar el ancho de columna. */
+  scale: number;
+}
+
+export interface MasonryOptions {
+  /** Separación entre imágenes (y entre columnas). */
+  padding: number;
+  /** Número de columnas; si falta se deduce de `aspect`. */
+  columns?: number;
+  /** Ancho de columna; si falta se usa la mediana de los anchos actuales. */
+  columnWidth?: number;
+  /** Proporción ancho/alto deseada, sólo para deducir `columns`. */
+  aspect?: number;
+}
+
+/** Ancho de columna por defecto: la mediana de los anchos actuales. */
+export function defaultColumnWidth(items: Item[]): number {
+  const widths = items.map((it) => itemBounds(it).w).filter((w) => w > 0);
+  return widths.length ? median(widths) : 0;
+}
+
+/**
+ * Columnas que dejan el conjunto con la proporción pedida.
+ *
+ * Con todas las imágenes al mismo ancho `colW`, el alto total repartido en
+ * `n` columnas es `H/n` y el ancho es `n·colW`, así que la proporción sale
+ * `n²·colW / H`: despejando, `n = √(aspect · H / colW)`.
+ */
+function columnsFor(items: Item[], colW: number, aspect: number): number {
+  if (colW <= 0) return 1;
+  let totalH = 0;
+  for (const it of items) {
+    const b = itemBounds(it);
+    if (b.w > 0) totalH += b.h * (colW / b.w);
+  }
+  const n = Math.sqrt((safeAspect(aspect) * totalH) / colW);
+  return Math.max(1, Math.min(items.length, Math.round(n) || 1));
+}
+
+/**
+ * Empaquetado en columnas tipo collage («masonry»): todas las imágenes pasan
+ * al mismo ancho y cada una se apila en la columna más corta, así que las
+ * columnas quedan parejas de alto y sin huecos. Devuelve las cajas en
+ * coordenadas locales (origen arriba a la izquierda) para que quien llame
+ * pueda desplazarlas; `arrangeMasonry` es la versión que trabaja sobre la
+ * escena.
+ *
+ * Respeta el orden recibido, así que ordenar la entrada cambia el resultado.
+ */
+export function masonryBoxes(items: Item[], opts: MasonryOptions): { boxes: MasonryBox[]; w: number; h: number } {
+  const padding = safePadding(opts.padding);
+  const colW = opts.columnWidth && opts.columnWidth > 0 ? opts.columnWidth : defaultColumnWidth(items);
+  if (!items.length || colW <= 0) return { boxes: [], w: 0, h: 0 };
+  const columns = Math.max(1, Math.round(opts.columns ?? columnsFor(items, colW, opts.aspect ?? 1)));
+
+  const heights = new Array<number>(columns).fill(0);
+  const boxes: MasonryBox[] = [];
+  for (const it of items) {
+    const b = itemBounds(it);
+    if (b.w <= 0 || b.h <= 0) continue;
+    // columna más corta; ante empate, la de más a la izquierda
+    let k = 0;
+    for (let i = 1; i < columns; i++) if (heights[i]! < heights[k]!) k = i;
+    const factor = colW / b.w;
+    const h = b.h * factor;
+    boxes.push({
+      id: it.id,
+      left: k * (colW + padding),
+      top: heights[k]!,
+      w: colW,
+      h,
+      scale: (it.scale || 1) * factor
+    });
+    heights[k] = heights[k]! + h + padding;
+  }
+  const tallest = heights.reduce((m, v) => Math.max(m, v), 0);
+  return {
+    boxes,
+    w: columns * colW + (columns - 1) * padding,
+    h: Math.max(0, tallest - padding)
+  };
+}
+
+/**
+ * Collage en columnas verticales sobre la escena: mismas anchuras, alturas
+ * libres y sin huecos. El conjunto queda centrado donde estaba.
+ */
+export function arrangeMasonry(items: Item[], opts: ArrangeOptions & { columns?: number; columnWidth?: number }): Placement[] {
+  const list = boxed(items);
+  const u = currentUnion(list);
+  if (!u) return [];
+  const target = centerOf(u);
+  const { boxes, w, h } = masonryBoxes(items, {
+    padding: opts.padding,
+    aspect: opts.aspect,
+    columns: opts.columns,
+    columnWidth: opts.columnWidth
+  });
+  if (!boxes.length) return [];
+  const dx = target.x - w / 2;
+  const dy = target.y - h / 2;
+  return boxes.map((b) => ({ id: b.id, x: dx + b.left + b.w / 2, y: dy + b.top + b.h / 2, scale: b.scale }));
+}
+
 /**
  * Cuadrícula regular: columnas = ceil(sqrt(n * aspect)), celdas del tamaño
  * del ítem más grande y cada ítem centrado dentro de su celda. Respeta el
