@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@capacitor/ios": "^7.6.9",
-    "@supabase/supabase-js": "^2.116.0",
+    "capacitor-icloud-sync": "file:plugins/capacitor-icloud-sync",
     "fflate": "^0.8.2",
     "idb": "^8.0.0"
   },

@@ -4,3 +4,4 @@ dev-dist
 android
 .DS_Store
 *.log
+.env.local

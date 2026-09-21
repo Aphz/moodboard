@@ -24,6 +24,12 @@ export interface AppSettings {
   aiApiKey: string;
   /** Modelo de Claude a usar; si no está en la tabla de precios se usa el por defecto */
   aiModel: string;
+  /**
+   * ID de cliente OAuth de Google para sincronizar con Drive (modo
+   * desarrollador). Normalmente viene de `VITE_GOOGLE_CLIENT_ID` en la build;
+   * este campo sirve para probar uno sin recompilar. Vacío = usar el de la build.
+   */
+  googleClientId: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -39,7 +45,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pencilOnlyDraw: true,
   aiApiKey: '',
   // Haiku 4.5: el modelo más barato de la tabla de src/ai/pricing.ts (DEFAULT_AI_MODEL).
-  aiModel: 'claude-haiku-4-5'
+  aiModel: 'claude-haiku-4-5',
+  googleClientId: ''
 };
 
 export let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
