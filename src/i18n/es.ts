@@ -273,6 +273,7 @@ export const es = {
   ui_pin_route_photos: 'iPhone o iPad: en Pinterest guarda los pines en Fotos (Compartir → Guardar imagen) y aquí elige Importar imágenes para seleccionar todas de una vez.',
   ui_pin_route_zip: 'Cualquier dispositivo: un ZIP con las imágenes del tablero (por ejemplo una carpeta comprimida desde el Mac o desde Archivos) se importa entero con el botón de abajo.',
   ui_pin_auto_organize: 'Organizar con IA al terminar de importar',
+  ui_pin_configure_key: 'Configurar clave API…',
   ui_pin_choose: 'Elegir imágenes o ZIP…',
   ui_pin_ready_drop: 'Listo: arrastra los pines al lienzo. Al soltar tres o más, se organizarán con IA.',
   ui_pin_guide: 'Ver la guía paso a paso',
