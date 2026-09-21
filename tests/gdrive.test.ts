@@ -699,6 +699,42 @@ describe('motor de sincronización', () => {
     }
   });
 
+  it('sondea cambios cada 10 s y reconcilia la lista completa una vez por minuto', async () => {
+    connectedState();
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    // jsdom arranca en "prerender" y el sondeo sólo corre con la app visible
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+
+    const poll = intervalSpy.mock.calls.find((c) => c[1] === 10_000);
+    expect(poll, 'debe programar el sondeo cada 10 s').toBeDefined();
+    const tick = poll![0] as () => void;
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    };
+    const changesCalls = () => server.calls.filter((c) => c.url.includes('/drive/v3/changes?')).length;
+    const listCalls = () => server.calls.filter((c) => decodeURIComponent(c.url).includes("value='scene'")).length;
+    const list0 = listCalls();
+    expect(changesCalls()).toBe(0);
+
+    for (let i = 1; i <= 5; i++) {
+      tick();
+      await settle();
+      expect(changesCalls()).toBe(i);
+      expect(listCalls()).toBe(list0);
+    }
+
+    // el sexto tic es una reconciliación completa
+    tick();
+    await settle();
+    expect(changesCalls()).toBe(5);
+    expect(listCalls()).toBe(list0 + 1);
+    await sync.disconnectGoogle();
+  });
+
   it('con ID de cliente pero sin sesión guardada queda "signed-out"', async () => {
     const sync = await loadSync();
     expect(sync.hasClientId()).toBe(true);

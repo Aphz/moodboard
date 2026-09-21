@@ -13,9 +13,10 @@
  *     `'off'`; si hay token guardado y vigente arranca; si no, `'signed-out'`.
  *  2. `fullSync()` compara los tableros locales con los de Drive y sube, baja
  *     o fusiona (`mergeScenes`) según corresponda.
- *  3. Cada 30 s (con la app visible) se consulta `changes.list` para enterarse
+ *  3. Cada 10 s (con la app visible) se consulta `changes.list` para enterarse
  *     de lo que hizo el otro dispositivo.
- *  4. Cualquier cambio local se sube 3 s después del último evento del store.
+ *  4. Cualquier cambio local se sube 1,5 s después del último evento del store,
+ *     y una vez por minuto se reconcilia la lista completa (`files.list`).
  *
  * Nada de lo que ocurre aquí puede romper la app: todos los callbacks están
  * envueltos en `try/catch` y los fallos sólo cambian el estado a `'error'`.
@@ -64,11 +65,18 @@ interface SyncRecord {
 }
 
 /** Milisegundos de espera tras el último cambio antes de subir el tablero. */
-const PUSH_DEBOUNCE_MS = 3000;
+const PUSH_DEBOUNCE_MS = 1500;
 /** Reintento cuando el usuario está en medio de un gesto. */
 const BUSY_RETRY_MS = 1000;
 /** Cada cuánto se consulta `changes.list` con la app visible. */
-const POLL_MS = 30000;
+const POLL_MS = 10000;
+/**
+ * Cada cuántos sondeos se hace una reconciliación completa (`files.list`).
+ * Es la red de seguridad si el flujo de cambios de Drive llega con retraso.
+ */
+const FULL_EVERY_N_POLLS = 6;
+/** No sondear dos veces en menos de esto al recuperar el foco. */
+const FOCUS_THROTTLE_MS = 3000;
 /** Margen para dar un token por vencido antes de tiempo. */
 const TOKEN_SKEW_MS = 60000;
 /** Tiempo máximo de espera de una renovación silenciosa. */
@@ -125,6 +133,8 @@ let errorMsg = '';
 let lastSyncAt = 0;
 let syncing = false;
 let syncPending = false;
+/** Último sondeo de cambios, para no repetirlo al recuperar el foco. */
+let lastPollAt = 0;
 let netBound = false;
 
 let unsubscribeStore: (() => void) | null = null;
@@ -161,6 +171,11 @@ export function getSyncError(): string {
 }
 
 /** Usuario con sesión de Google iniciada, o `null`. */
+/** ¿Hay una cuenta de Google conectada en este dispositivo? */
+export function isConnected(): boolean {
+  return !!token;
+}
+
 export function getSyncUser(): { email: string } | null {
   return token ? { email: token.email } : null;
 }
@@ -476,9 +491,14 @@ function bindNetwork() {
     if (document.visibilityState === 'visible') void fullSync();
     else void pushCurrentScene();
   });
+  // en iPad (Split View, Slide Over) la app puede seguir visible y perder el foco
+  window.addEventListener('focus', () => {
+    if (!token || Date.now() - lastPollAt < FOCUS_THROTTLE_MS) return;
+    void pollChanges();
+  });
 }
 
-/** Sube el tablero abierto 3 s después del último cambio real. */
+/** Sube el tablero abierto 1,5 s después del último cambio real. */
 function watchStore() {
   if (unsubscribeStore || !app) return;
   unsubscribeStore = app.store.subscribe((e) => {
@@ -489,12 +509,18 @@ function watchStore() {
   });
 }
 
-/** Sondea `changes.list` cada 30 s mientras la app está visible. */
+/**
+ * Sondea `changes.list` cada 10 s mientras la app está visible y, una vez por
+ * minuto, reconcilia la lista completa por si el flujo de cambios se retrasa.
+ */
 function startPolling() {
   if (pollTimer || typeof window === 'undefined') return;
+  let ticks = 0;
   pollTimer = window.setInterval(() => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-    void pollChanges();
+    ticks++;
+    if (ticks % FULL_EVERY_N_POLLS === 0) void fullSync();
+    else void pollChanges();
   }, POLL_MS);
 }
 
@@ -701,6 +727,7 @@ async function syncScene(id: string, meta: RemoteSceneMeta | null): Promise<void
 async function pollChanges(): Promise<void> {
   try {
     if (!drive || !token || syncing) return;
+    lastPollAt = Date.now();
     const pageToken = await getKV<string | null>(KV_PAGE_TOKEN, null);
     if (!pageToken) {
       await setKV(KV_PAGE_TOKEN, await drive.startPageToken());

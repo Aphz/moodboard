@@ -5,13 +5,25 @@ import { t } from '../i18n';
 import { h, svg, clear } from './dom';
 import { icons } from './icons';
 import { showDialog, showMenu } from './dialogs';
+import { getSyncState, isConnected, onSyncState, syncNow } from '../sync';
 
 export async function showScenesDialog(app: App) {
   const grid = h('div', { class: 'grid-list' });
-  const d = showDialog([h('h2', null, t('ui_recent')), grid], { wide: true });
+  const status = h('div', { class: 'hint sync-hint', 'aria-live': 'polite' });
+  let offSync: (() => void) | null = null;
+  const d = showDialog([h('h2', null, t('ui_recent')), status, grid], {
+    wide: true,
+    onClose: () => {
+      offSync?.();
+      offSync = null;
+    }
+  });
+  let gen = 0;
   const refresh = async () => {
-    clear(grid);
+    const mine = ++gen;
     const list = await listScenes();
+    if (mine !== gen) return; // llegó otra actualización mientras leíamos
+    clear(grid);
     const newCard = h('div', { class: 'card new' }, svg(icons.plus, 28), h('div', { class: 'meta' }, t('cmd_new')));
     newCard.addEventListener('click', async () => {
       d.close();
@@ -68,4 +80,22 @@ export async function showScenesDialog(app: App) {
     }
   };
   await refresh();
+
+  // Con una cuenta conectada, el listado pide los tableros de los demás
+  // dispositivos al abrirse y se vuelve a pintar cuando llegan.
+  if (isConnected()) {
+    const paint = () => {
+      const s = getSyncState();
+      status.textContent = s === 'syncing' ? t('ui_sync_state_syncing') : '';
+      status.style.display = s === 'syncing' ? '' : 'none';
+    };
+    paint();
+    offSync = onSyncState(() => {
+      paint();
+      if (getSyncState() === 'synced') void refresh();
+    });
+    void syncNow();
+  } else {
+    status.style.display = 'none';
+  }
 }
