@@ -1,19 +1,36 @@
 # Importar un tablero de Pinterest
 
-La app no puede bajar los pines por URL: el CDN de imágenes de Pinterest
-(`i.pinimg.com`) responde sin cabeceras CORS, así que Safari y Chrome bloquean
-la descarga desde una app web. Y la API oficial de Pinterest exige un servidor
-con secreto de cliente, que es justo lo que esta app evita. Por eso el tablero
-entra como **imágenes** o como un **ZIP**, y la IA se encarga después de
-clasificarlo y agruparlo.
-
-Todo empieza en el menú ⋯ → **Importar tablero de Pinterest…**. El diálogo
-resume las vías y deja marcada la casilla *Organizar con IA al terminar de
-importar*: la siguiente importación (archivos o arrastre) abre sola el paso 2.
+Menú ⋯ → **Importar tablero de Pinterest…**, pega el enlace y listo: los
+pines entran al lienzo y, si tienes clave de IA, se abre solo el paso 2. El
+mismo diálogo aparece al pegar o soltar un enlace de Pinterest en el lienzo,
+o al usar *Importar desde URL* con uno.
 
 ## Paso 1: traer las imágenes
 
-### iPad: arrastrar desde Pinterest (lo más rápido)
+### Desde el enlace (lo normal)
+
+Sirve cualquier enlace de tablero o de pin, incluido el acortador `pin.it`
+que da la app al compartir, y los tableros compartidos por enlace de
+invitación. Detalles que conviene saber:
+
+- **Cuántos pines entran.** Pinterest sólo muestra los primeros 25 pines de
+  un tablero sin iniciar sesión, y su RSS público da los 25 más recientes. La
+  app une las dos fuentes, así que un tablero de hasta 40-50 pines suele
+  entrar completo; de uno más grande entra esa parte, y el aviso final dice
+  cuántos de cuántos. Para el resto, las vías de abajo.
+- **Calidad.** Se pide el original de cada pin reducido a 1600 px de lado y
+  recomprimido en JPEG: sobra para un moodboard y pesa unos 200 KB por pin.
+- **Por dónde pasa.** Pinterest no envía cabeceras CORS, así que una app web
+  no puede leerlo directamente. El enlace del tablero se lee a través de
+  [r.jina.ai](https://r.jina.ai) (Jina Reader) y cada imagen se descarga por
+  [wsrv.nl](https://wsrv.nl) (images.weserv.nl), dos servicios públicos y
+  gratuitos que sí las envían. Sólo viajan el enlace y las URL públicas de
+  las imágenes; nunca nada de tu cuenta. Si un día alguno deja de responder,
+  el aviso lo dice y quedan las vías de abajo.
+- **Privado de verdad.** Un tablero secreto sin enlace de invitación no se
+  puede leer (tampoco desde un navegador sin sesión).
+
+### iPad: arrastrar desde Pinterest
 
 1. Abre la app de Pinterest y Moodboard una al lado de la otra (Split View o
    Slide Over). Moodboard instalada en la pantalla de inicio funciona igual
@@ -64,8 +81,8 @@ muestra la estimación antes de llamar y el costo real después.
 
 ## Qué no hace (todavía)
 
+- **Tableros grandes completos.** Más allá de los primeros 25-50 pines
+  Pinterest exige sesión; la app nativa (Capacitor) podrá leer el tablero
+  con la sesión del usuario y sin la limitación CORS.
 - **Recibir desde la hoja Compartir de iOS.** Safari no admite `share_target`
-  en apps web; llegará con la app nativa (Capacitor), que además podrá
-  descargar los pines sin la limitación CORS.
-- **Pegar la URL del tablero.** Requeriría un servidor intermedio para leer
-  Pinterest; queda fuera por diseño mientras la app no tenga servidor.
+  en apps web; llegará con la app nativa.

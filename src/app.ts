@@ -63,7 +63,8 @@ import { showManageImages } from './ui/manageImages';
 import { showExportDialog } from './ui/exportDialog';
 import { showCommentDialog, showOpacityDialog, showPaletteDialog, showCanvasColorDialog, showShortcutsDialog } from './ui/itemDialogs';
 import { showAiDescribe, runAiTagging, showAiOrganize } from './ui/aiDialogs';
-import { showPinterestImport } from './ui/importBoardDialog';
+import { importPinterestUrl, showPinterestImport } from './ui/importBoardDialog';
+import { isPinterestUrl } from './features/pinterest';
 import { Toolbar } from './ui/toolbar';
 import { HierarchyPanel } from './ui/hierarchy';
 import { SubBar } from './ui/subBar';
@@ -472,7 +473,7 @@ export class App {
     if (entries.length) {
       const items = await importBlobs(this.store, entries, this.viewCenter(), { parentId: this.pendingImportParent });
       if (items.length) this.gestures.fitSelection();
-      await this.maybeOrganizeAfterImport(items, 2);
+      await this.afterImport(items, 2);
     }
     this.pendingImportParent = null;
   }
@@ -506,7 +507,7 @@ export class App {
   }
 
   /** Lanza «IA: organizar» sobre lo recién importado si estaba programado. */
-  private async maybeOrganizeAfterImport(items: ImageItem[], min: number) {
+  async afterImport(items: ImageItem[], min: number) {
     if (!this.organizeAfterImportUntil || Date.now() > this.organizeAfterImportUntil) return;
     if (items.length < min) return;
     this.organizeAfterImportUntil = 0;
@@ -546,7 +547,8 @@ export class App {
           return;
         }
         if (text && /^https?:\/\/\S+$/.test(text.trim())) {
-          await importFromUrl(this.store, text.trim(), pos);
+          if (isPinterestUrl(text)) showPinterestImport(this, text.trim());
+          else await importFromUrl(this.store, text.trim(), pos);
           return;
         }
         if (hasInternalClip()) {
@@ -576,7 +578,10 @@ export class App {
         await importBlobs(this.store, blobs, pos);
       } else if (urls.length) {
         e.preventDefault();
-        for (const u of urls.slice(0, 10)) await importFromUrl(this.store, u, pos);
+        for (const u of urls.slice(0, 10)) {
+          if (isPinterestUrl(u)) showPinterestImport(this, u);
+          else await importFromUrl(this.store, u, pos);
+        }
       } else if (hasInternalClip()) {
         e.preventDefault();
         pasteItems(this.store, pos);
@@ -613,9 +618,13 @@ export class App {
       if (blobs.length) {
         const items = await importBlobs(this.store, blobs, pos);
         // al arrastrar pines de uno en uno no molesta; con tres o más ya organiza
-        await this.maybeOrganizeAfterImport(items, 3);
-      } else if (urls.length) for (const u of urls.slice(0, 10)) await importFromUrl(this.store, u, pos);
-      else if (text.trim()) this.createNote(pos, text.trim());
+        await this.afterImport(items, 3);
+      } else if (urls.length) {
+        for (const u of urls.slice(0, 10)) {
+          if (isPinterestUrl(u)) await importPinterestUrl(this, u);
+          else await importFromUrl(this.store, u, pos);
+        }
+      } else if (text.trim()) this.createNote(pos, text.trim());
     });
   }
 
@@ -711,7 +720,9 @@ export class App {
         id: 'import_url', title: 'cmd_import_url', category: 'file', icon: 'link',
         run: async () => {
           const u = await promptDialog(t('ui_url_prompt'), '', { type: 'url', placeholder: 'https://…' });
-          if (u) await importFromUrl(S, u.trim(), this.viewCenter());
+          if (!u) return;
+          if (isPinterestUrl(u)) showPinterestImport(this, u.trim());
+          else await importFromUrl(S, u.trim(), this.viewCenter());
         }
       },
       { id: 'import_pinterest', title: 'cmd_import_pinterest', category: 'file', icon: 'pin', run: () => showPinterestImport(this) },

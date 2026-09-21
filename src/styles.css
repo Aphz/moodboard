@@ -115,6 +115,8 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .dialog ol.routes { margin: 8px 0 4px; padding-left: 0; list-style: none; counter-reset: route; }
 .dialog ol.routes li { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; line-height: 1.4; }
 .dialog ol.routes .route-icon { flex: none; display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 9px; background: rgba(10, 132, 255, 0.16); color: #4ea1ff; }
+.dialog details.routes-details { margin: 6px 0; }
+.dialog details.routes-details summary { cursor: pointer; color: var(--fg-muted); font-size: 13px; }
 .dialog label.row { cursor: pointer; }
 .dialog label.row input { flex: none; }
 .dialog label.row span { flex: 1; }
