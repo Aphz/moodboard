@@ -323,5 +323,7 @@ export const es = {
   ui_sync_share_copied: 'Enlace copiado: ábrelo en el otro dispositivo',
   ui_sync_setup_received: 'Configuración recibida: ahora entra con tu correo y tu contraseña',
   ui_sync_share_sql: 'Compartir SQL…',
-  ui_sync_show_sql: 'Ver SQL aquí'
+  ui_sync_show_sql: 'Ver SQL aquí',
+  ui_sync_open_users: 'Abrir Authentication → Users',
+  ui_sync_wrong_password_hint: 'Si esta cuenta la creaste antes con el código por correo, quedó sin contraseña: bórrala en Supabase → Authentication → Users y vuelve a tocar «Entrar o crear cuenta».'
 } as const;

@@ -36,6 +36,7 @@ import {
   MIN_PASSWORD_LENGTH,
   onSyncState,
   providersUrl,
+  usersUrl,
   signIn,
   signOut,
   sqlEditorUrl,
@@ -431,6 +432,11 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
         const open = h('button', { class: 'btn' }, t('ui_sync_open_providers'));
         open.addEventListener('click', () => openPage(providersUrl(getSyncConfig()?.url ?? url)));
         nodes.push(h('div', { class: 'actions' }, open, enter));
+      } else if (authFail?.code === 'wrong-password') {
+        // Caso típico: la cuenta quedó creada sin contraseña por un intento anterior con código por correo.
+        const users = h('button', { class: 'btn' }, t('ui_sync_open_users'));
+        users.addEventListener('click', () => openPage(usersUrl(getSyncConfig()?.url ?? url)));
+        nodes.push(h('p', { class: 'hint' }, t('ui_sync_wrong_password_hint')), h('div', { class: 'actions' }, users, enter));
       } else {
         nodes.push(h('div', { class: 'actions' }, enter));
       }

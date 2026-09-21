@@ -459,6 +459,12 @@ export function getProjectRef(url: string): string {
 }
 
 /** Panel de Supabase: Authentication → Sign In / Providers. */
+/** Página de usuarios del panel de Supabase (para borrar una cuenta creada a medias). */
+export function usersUrl(url: string): string {
+  const ref = getProjectRef(url);
+  return ref ? `https://supabase.com/dashboard/project/${ref}/auth/users` : 'https://supabase.com/dashboard';
+}
+
 export function providersUrl(url: string): string {
   const ref = getProjectRef(url);
   return ref ? `https://supabase.com/dashboard/project/${ref}/auth/providers` : 'https://supabase.com/dashboard';

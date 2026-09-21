@@ -325,5 +325,7 @@ export const en: Record<keyof typeof es, string> = {
   ui_sync_share_copied: 'Link copied: open it on the other device',
   ui_sync_setup_received: 'Setup received: now sign in with your email and password',
   ui_sync_share_sql: 'Share SQL…',
-  ui_sync_show_sql: 'Show SQL here'
+  ui_sync_show_sql: 'Show SQL here',
+  ui_sync_open_users: 'Open Authentication → Users',
+  ui_sync_wrong_password_hint: 'If this account was created earlier with the email code, it has no password: delete it in Supabase → Authentication → Users and tap "Sign in or create account" again.'
 };
