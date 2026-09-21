@@ -205,10 +205,16 @@ tiene prioridad.
 - **Borrado**: lógico. Se marca `appProperties.deleted = '1'` y se refresca
   `modifiedTime`; el otro dispositivo lo ve y borra su copia local. A los 30
   días el archivo se elimina de verdad.
-- **Cambios en vivo**: cada 30 s, con la app visible, se consulta
-  `changes.list` a partir de `changes.getStartPageToken`. Además se
-  sincroniza al volver a la app (`visibilitychange`) y al recuperar la red.
-- **Subida de lo local**: 3 s después del último cambio del tablero abierto.
+- **Cambios en vivo**: cada 10 s, con la app visible, se consulta
+  `changes.list` a partir de `changes.getStartPageToken`; una vez por minuto
+  se reconcilia la lista completa (`files.list`) por si el flujo de cambios
+  de Drive llega con retraso. Además se sincroniza al volver a la app
+  (`visibilitychange`), al recuperar el foco, al recuperar la red y al abrir
+  el listado de tableros.
+- **Subida de lo local**: 2 s después del último cambio del tablero abierto,
+  y nunca dos subidas en menos de 6 s (Drive limita las escrituras por
+  archivo). La reconciliación periódica no relee de IndexedDB los tableros
+  que no cambiaron ni en Drive ni en el dispositivo.
 - **Errores**: un 401 renueva el token una vez; los 403 por cuota, los 429 y
   los 5xx se reintentan con espera exponencial (3 intentos). El usuario solo
   ve mensajes traducidos.

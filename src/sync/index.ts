@@ -13,9 +13,11 @@
  *     `'off'`; si hay token guardado y vigente arranca; si no, `'signed-out'`.
  *  2. `fullSync()` compara los tableros locales con los de Drive y sube, baja
  *     o fusiona (`mergeScenes`) según corresponda.
- *  3. Cada 30 s (con la app visible) se consulta `changes.list` para enterarse
+ *  3. Cada 10 s (con la app visible) se consulta `changes.list` para enterarse
  *     de lo que hizo el otro dispositivo.
- *  4. Cualquier cambio local se sube 3 s después del último evento del store.
+ *  4. Cualquier cambio local se sube 2 s después del último evento del store
+ *     (y nunca dos veces en menos de 6 s),
+ *     y una vez por minuto se reconcilia la lista completa (`files.list`).
  *
  * Nada de lo que ocurre aquí puede romper la app: todos los callbacks están
  * envueltos en `try/catch` y los fallos sólo cambian el estado a `'error'`.
@@ -30,7 +32,8 @@ import {
   loadScene,
   saveScene,
   setKV,
-  setRemoteBlobProvider
+  setRemoteBlobProvider,
+  type SceneMeta
 } from '../core/persistence';
 import { appSettings, updateAppSettings } from '../core/settings';
 import { t } from '../i18n';
@@ -61,14 +64,25 @@ interface SyncRecord {
   remoteMtime: number;
   /** Identificador del archivo en Drive. */
   fileId: string;
+  /** `updatedAt` local del tablero en ese momento (para saltar lecturas). */
+  updatedAt?: number;
 }
 
 /** Milisegundos de espera tras el último cambio antes de subir el tablero. */
-const PUSH_DEBOUNCE_MS = 3000;
+const PUSH_DEBOUNCE_MS = 2000;
+/** Distancia mínima entre dos subidas: Drive limita las escrituras por archivo. */
+const PUSH_MIN_GAP_MS = 6000;
 /** Reintento cuando el usuario está en medio de un gesto. */
 const BUSY_RETRY_MS = 1000;
 /** Cada cuánto se consulta `changes.list` con la app visible. */
-const POLL_MS = 30000;
+const POLL_MS = 10000;
+/**
+ * Cada cuántos sondeos se hace una reconciliación completa (`files.list`).
+ * Es la red de seguridad si el flujo de cambios de Drive llega con retraso.
+ */
+const FULL_EVERY_N_POLLS = 6;
+/** No sondear dos veces en menos de esto al recuperar el foco. */
+const FOCUS_THROTTLE_MS = 3000;
 /** Margen para dar un token por vencido antes de tiempo. */
 const TOKEN_SKEW_MS = 60000;
 /** Tiempo máximo de espera de una renovación silenciosa. */
@@ -125,6 +139,10 @@ let errorMsg = '';
 let lastSyncAt = 0;
 let syncing = false;
 let syncPending = false;
+/** Último sondeo o sincronización, para no repetirlo al recuperar el foco. */
+let lastPollAt = 0;
+/** Última subida, para espaciar las escrituras sobre el mismo archivo. */
+let lastPushAt = 0;
 let netBound = false;
 
 let unsubscribeStore: (() => void) | null = null;
@@ -161,6 +179,12 @@ export function getSyncError(): string {
 }
 
 /** Usuario con sesión de Google iniciada, o `null`. */
+/** ¿Hay una cuenta conectada y el motor ya está en marcha? */
+export function isConnected(): boolean {
+  return !!token && !!drive;
+}
+
+/** Usuario con sesión de Google iniciada, o null. */
 export function getSyncUser(): { email: string } | null {
   return token ? { email: token.email } : null;
 }
@@ -476,25 +500,40 @@ function bindNetwork() {
     if (document.visibilityState === 'visible') void fullSync();
     else void pushCurrentScene();
   });
+  // en iPad (Split View, Slide Over) la app puede seguir visible y perder el foco
+  window.addEventListener('focus', () => {
+    if (!token || Date.now() - lastPollAt < FOCUS_THROTTLE_MS) return;
+    void pollChanges();
+  });
 }
 
-/** Sube el tablero abierto 3 s después del último cambio real. */
+/**
+ * Sube el tablero abierto 2 s después del último cambio real, sin acercar
+ * dos subidas a menos de `PUSH_MIN_GAP_MS`.
+ */
 function watchStore() {
   if (unsubscribeStore || !app) return;
   unsubscribeStore = app.store.subscribe((e) => {
     if (e.type === 'viewport' || e.type === 'selection') return;
     if (typeof window === 'undefined') return;
     clearTimeout(pushTimer);
-    pushTimer = window.setTimeout(() => void pushCurrentScene(), PUSH_DEBOUNCE_MS);
+    const wait = Math.max(PUSH_DEBOUNCE_MS, lastPushAt + PUSH_MIN_GAP_MS - Date.now());
+    pushTimer = window.setTimeout(() => void pushCurrentScene(), wait);
   });
 }
 
-/** Sondea `changes.list` cada 30 s mientras la app está visible. */
+/**
+ * Sondea `changes.list` cada 10 s mientras la app está visible y, una vez por
+ * minuto, reconcilia la lista completa por si el flujo de cambios se retrasa.
+ */
 function startPolling() {
   if (pollTimer || typeof window === 'undefined') return;
+  let ticks = 0;
   pollTimer = window.setInterval(() => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-    void pollChanges();
+    ticks++;
+    if (ticks % FULL_EVERY_N_POLLS === 0) void fullSync();
+    else void pollChanges();
   }, POLL_MS);
 }
 
@@ -583,12 +622,19 @@ async function fullSync(): Promise<void> {
       fileIds.set(m.sceneId, m.fileId);
     }
     const local = await listScenes();
+    const localById = new Map(local.map((l) => [l.id, l]));
+    const openId = app?.store.scene.id;
     const ids = new Set<string>([...remoteById.keys(), ...local.map((l) => l.id)]);
-    for (const id of ids) await syncScene(id, remoteById.get(id) ?? null);
+    for (const id of ids) {
+      const meta = remoteById.get(id) ?? null;
+      if (id !== openId && (await unchangedSinceLastSync(id, meta, localById.get(id)))) continue;
+      await syncScene(id, meta);
+    }
     await pushCurrentScene();
     await drive.pruneDeleted(remote);
     await ensurePageToken();
     lastSyncAt = Date.now();
+    lastPollAt = lastSyncAt;
     await setKV(KV_LAST_SYNC, lastSyncAt);
     setState('synced');
   } catch (e) {
@@ -600,6 +646,18 @@ async function fullSync(): Promise<void> {
       void fullSync();
     }
   }
+}
+
+/**
+ * Atajo de la reconciliación periódica: si Drive no cambió desde la última
+ * sincronización y el `updatedAt` local es el anotado entonces, no hace falta
+ * leer el tablero completo de IndexedDB.
+ */
+async function unchangedSinceLastSync(id: string, meta: RemoteSceneMeta | null, local: SceneMeta | undefined): Promise<boolean> {
+  if (!meta || !local || meta.deleted) return false;
+  const rec = await getKV<SyncRecord | null>(recKey(id), null);
+  if (!rec || rec.updatedAt === undefined) return false;
+  return rec.remoteMtime === meta.modifiedTime && rec.updatedAt === local.updatedAt;
 }
 
 /**
@@ -699,8 +757,10 @@ async function syncScene(id: string, meta: RemoteSceneMeta | null): Promise<void
 
 /** Consulta los cambios que hizo el otro dispositivo desde la última vez. */
 async function pollChanges(): Promise<void> {
+  if (!drive || !token || syncing) return;
+  syncing = true;
   try {
-    if (!drive || !token || syncing) return;
+    lastPollAt = Date.now();
     const pageToken = await getKV<string | null>(KV_PAGE_TOKEN, null);
     if (!pageToken) {
       await setKV(KV_PAGE_TOKEN, await drive.startPageToken());
@@ -734,6 +794,12 @@ async function pollChanges(): Promise<void> {
     setState('synced');
   } catch (e) {
     fail(e);
+  } finally {
+    syncing = false;
+    if (syncPending) {
+      syncPending = false;
+      void fullSync();
+    }
   }
 }
 
@@ -764,6 +830,7 @@ async function pushScene(scene: Scene, force = false): Promise<void> {
     fileId = rec?.fileId ?? null;
   }
   const saved = await d.uploadScene(scene, fileId);
+  lastPushAt = Date.now();
   fileIds.set(scene.id, saved.fileId);
   await uploadSceneBlobs(scene);
   await markSynced(scene, saved.fileId, saved.modifiedTime, digest);
@@ -777,7 +844,7 @@ async function markSynced(
 ): Promise<void> {
   syncedDigest.set(scene.id, digest);
   fileIds.set(scene.id, fileId);
-  const rec: SyncRecord = { digest, remoteMtime, fileId };
+  const rec: SyncRecord = { digest, remoteMtime, fileId, updatedAt: scene.updatedAt };
   await setKV(recKey(scene.id), rec);
 }
 
