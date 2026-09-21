@@ -35,6 +35,13 @@ Sin backend: no hay cuentas, no hay servidor, no sale nada del dispositivo salvo
 imágenes que tú importes desde una URL y, si la activas, las llamadas a la API de Anthropic
 con tu propia clave.
 
+## Sincronización entre dispositivos
+
+La app funciona sin cuenta. Si quieres seguir el mismo tablero en el iPhone y el iPad,
+configura tu propio proyecto gratuito de Supabase (5 minutos, guía en [docs/SYNC.md](docs/SYNC.md)),
+inicia sesión con tu correo (código de un solo uso) y las escenas e imágenes se
+sincronizan con actualización en vivo. Nada sale del dispositivo hasta que tú lo actives.
+
 ## Instalación en iPad / iPhone
 
 1. Abre la URL donde esté publicada la app en **Safari** (no Chrome: solo Safari instala PWAs en iOS).

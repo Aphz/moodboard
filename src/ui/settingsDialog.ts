@@ -7,6 +7,8 @@ import { h } from './dom';
 import { showDialog, toast } from './dialogs';
 import { bytesToHuman } from '../features/imageTools';
 import { renderAiSettings } from './aiDialogs';
+import { showAccountDialog, syncStateLabel } from './accountDialog';
+import { getSyncState, getSyncUser } from '../sync';
 
 declare const __APP_VERSION__: string;
 
@@ -68,6 +70,11 @@ export function showSettingsDialog(app: App) {
     h('h3', null, 'Apple Pencil'),
     row(t('ui_pencil_pressure'), check(a.pencilPressure, (v) => void updateAppSettings({ pencilPressure: v }))),
     row(t('ui_pencil_only_draw'), check(a.pencilOnlyDraw, (v) => void updateAppSettings({ pencilOnlyDraw: v }))),
+    h('h3', null, t('ui_sync_section')),
+    h('div', { class: 'row' },
+      h('label', null, `${syncStateLabel(getSyncState())}${getSyncUser()?.email ? ' · ' + getSyncUser()!.email : ''}`),
+      h('button', { class: 'btn small', onclick: () => { d.close(); showAccountDialog(app); } }, t('ui_sync_open_account'))
+    ),
     renderAiSettings(),
     h('h3', null, t('ui_storage')),
     storage,

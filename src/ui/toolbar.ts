@@ -7,12 +7,14 @@ import { h, svg, clear } from './dom';
 import { icons } from './icons';
 import { showMenu, toast, type MenuEntry } from './dialogs';
 import { aiAvailable } from '../ai/claude';
+import { syncStatusIcon } from './accountDialog';
 
 export class Toolbar {
   private top = document.getElementById('top-bar')!;
   private bottom = document.getElementById('toolbar')!;
   private titleEl!: HTMLElement;
   private buttons = new Map<string, HTMLButtonElement>();
+  private syncIcon: { el: HTMLElement; destroy(): void } | null = null;
 
   constructor(private app: App) {
     this.rebuild();
@@ -23,6 +25,8 @@ export class Toolbar {
     clear(this.top);
     clear(this.bottom);
     this.buttons.clear();
+    this.syncIcon?.destroy();
+    this.syncIcon = syncStatusIcon();
     const S = this.app.store;
 
     // --- superior
@@ -39,6 +43,7 @@ export class Toolbar {
       { class: 'pill' },
       this.tb('search', 'search', () => runCommand('command_palette')),
       this.tb('layers', 'layers', () => runCommand('toggle_hierarchy')),
+      this.syncIcon.el,
       this.tb('more', 'more', (e) => this.showMainMenu(e.currentTarget as HTMLElement))
     );
     this.top.append(left, h('div', { class: 'spacer' }), right);
