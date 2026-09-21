@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -39,6 +40,8 @@ jobs:
         run: npm run build
 
       - name: Subir dist como artifact
+        # La subida depende de la infraestructura de GitHub: si falla, no invalida la verificación.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: dist
