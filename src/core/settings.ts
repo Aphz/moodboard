@@ -30,6 +30,10 @@ export interface AppSettings {
    * este campo sirve para probar uno sin recompilar. Vacío = usar el de la build.
    */
   googleClientId: string;
+  /** Categorías propias para «IA: organizar por categorías», separadas por comas */
+  aiCategories: string;
+  /** Si es true, la IA propone las categorías según el tablero en vez de usar `aiCategories` */
+  aiCategoriesAdHoc: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -46,7 +50,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiApiKey: '',
   // Haiku 4.5: el modelo más barato de la tabla de src/ai/pricing.ts (DEFAULT_AI_MODEL).
   aiModel: 'claude-haiku-4-5',
-  googleClientId: ''
+  googleClientId: '',
+  aiCategories: 'Poses, Texturas, Ropa',
+  aiCategoriesAdHoc: false
 };
 
 export let appSettings: AppSettings = { ...DEFAULT_SETTINGS };

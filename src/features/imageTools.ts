@@ -305,13 +305,25 @@ export async function fetchImageBlob(url: string): Promise<Blob> {
   return blob.type ? blob : new Blob([blob], { type });
 }
 
+/** Indica si un nombre de archivo tiene extensión de imagen. */
+export function isImageName(name: string): boolean {
+  const lower = (name || '').toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  if (dot < 0) return false;
+  return IMAGE_EXTENSIONS.includes(lower.slice(dot + 1));
+}
+
 /** Indica si un archivo parece una imagen, por tipo MIME o por extensión. */
 export function isImageFile(file: File): boolean {
   if (file.type && file.type.toLowerCase().startsWith('image/')) return true;
-  const name = (file.name || '').toLowerCase();
-  const dot = name.lastIndexOf('.');
-  if (dot < 0) return false;
-  return IMAGE_EXTENSIONS.includes(name.slice(dot + 1));
+  return isImageName(file.name || '');
+}
+
+/** ¿Es un ZIP (por tipo MIME o extensión), incluido nuestro `.moodboard`? */
+export function isZipFile(file: File): boolean {
+  const type = (file.type || '').toLowerCase();
+  if (type === 'application/zip' || type === 'application/x-zip-compressed') return true;
+  return /\.(zip|moodboard)$/i.test(file.name || '');
 }
 
 /** Formatea un tamaño en bytes como texto legible (B, KB, MB, GB). */

@@ -231,7 +231,7 @@ export class Toolbar {
       this.entry('show_all'),
       { sep: true },
       this.entry('find_duplicates'),
-      ...(aiAvailable() ? [this.entry('ai_describe')] : []),
+      ...(aiAvailable() ? [this.entry('ai_describe'), this.entry('ai_organize')] : []),
       { sep: true },
       this.entry('shortcuts'),
       this.entry('settings')
@@ -256,7 +256,7 @@ export class Toolbar {
       this.entry('export_selection_png'),
       { sep: true },
       ...(hasImg ? [this.entry('crop'), this.entry('discard_crop'), this.entry('replace_image'), this.entry('extract_palette'), this.entry('add_palette_note')] : []),
-      ...(hasImg && aiAvailable() ? [this.entry('ai_tag')] : []),
+      ...(hasImg && aiAvailable() ? [this.entry('ai_tag'), this.entry('ai_organize')] : []),
       ...(hasImg ? [this.entry('ai_find_similar')] : []),
       { sep: true },
       {

@@ -123,8 +123,9 @@ desactivados y ni siquiera aparecen en los menús.
 
 - **IA: describir tablero** — manda miniaturas de hasta 20 imágenes y el texto de las notas, y devuelve una descripción en markdown que puedes insertar como nota.
 - **IA: etiquetar imágenes seleccionadas** — devuelve etiquetas por imagen y las agrega a `item.tags` en un solo paso de deshacer.
+- **IA: organizar por categorías** — clasifica las imágenes con tus categorías (por defecto *Poses, Texturas, Ropa*) o con las que la IA proponga para el tablero, y las recoloca en bloques con un grupo y un título por categoría. Es la función más barata: miniaturas de 256 px, unos 90 tokens por imagen. Es también el segundo paso de **Importar tablero de Pinterest…**, que trae los pines de un tablero a partir de su enlace (ver [docs/PINTEREST.md](docs/PINTEREST.md)).
 
-Modelo por defecto: `claude-sonnet-5` (editable en Ajustes). Las llamadas van directo desde
+Modelo por defecto: `claude-haiku-4-5` (editable en Ajustes). Las llamadas van directo desde
 el navegador a `https://api.anthropic.com/v1/messages` con la cabecera
 `anthropic-dangerous-direct-browser-access`; no hay proxy ni servidor intermedio.
 

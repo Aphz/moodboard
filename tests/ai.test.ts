@@ -10,13 +10,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appSettings } from '../src/core/settings';
 import {
   aiAvailable,
+  classifyImages,
   describeBoard,
+  normalizeCategory,
   tagImages,
   redactKey,
   resolveModel,
   addUsage,
   emptyUsage,
   AiError,
+  MAX_AD_HOC_CATEGORIES,
+  MAX_TOKENS_CLASSIFY,
   MAX_TOKENS_DESCRIBE,
   MAX_TOKENS_TAG
 } from '../src/ai/claude';
@@ -272,5 +276,74 @@ describe('usageToUsd y formato', () => {
     expect(formatTokens(1240)).toBe('1.240');
     expect(formatTokens(999)).toBe('999');
     expect(formatTokens(1234567)).toBe('1.234.567');
+  });
+});
+
+describe('classifyImages', () => {
+  const imgs = (n: number, prefix = 'i') =>
+    Array.from({ length: n }, (_, k) => ({ id: `${prefix}${k}`, name: `${prefix}${k}.jpg`, jpegBase64: 'AAAA' }));
+
+  it('con categorías fijas asigna cada imagen a una de ellas y manda lo demás a Otros', async () => {
+    const fn = mockFetch(() => okResponse('{"assignments":{"i0":"poses","i1":"Ropa","i2":"Coches"}}'));
+    const { result } = await classifyImages({ images: imgs(3), categories: ['Poses', 'texturas', 'Ropa', 'poses '], lang: 'es' });
+    expect(result.assignments).toEqual({ i0: 'Poses', i1: 'Ropa', i2: 'Otros' });
+    expect(result.categories).toEqual(['Poses', 'Texturas', 'Ropa', 'Otros']);
+    const body = JSON.parse(String((fn.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as {
+      max_tokens: number;
+      messages: { content: { type: string; text?: string }[] }[];
+    };
+    expect(body.max_tokens).toBe(MAX_TOKENS_CLASSIFY);
+    const last = body.messages[0]!.content.at(-1)!.text!;
+    expect(last).toContain('Categorías permitidas: Poses, Texturas, Ropa');
+    expect(last).toContain('"Otros"');
+  });
+
+  it('sin categorías la IA las propone en el primer lote y los siguientes las reutilizan', async () => {
+    let call = 0;
+    const fn = mockFetch(() => {
+      call++;
+      if (call === 1) {
+        const a: Record<string, string> = {};
+        for (let k = 0; k < 20; k++) a[`i${k}`] = k % 2 ? 'Texturas' : 'Poses';
+        return okResponse(JSON.stringify({ categories: ['Poses', 'Texturas'], assignments: a }));
+      }
+      return okResponse('{"assignments":{"i20":"Poses","i21":"Entorno","i22":"nada de esto"}}');
+    });
+    const { result, usage } = await classifyImages({ images: imgs(23), categories: [], lang: 'es' });
+    expect(fn).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(String((fn.mock.calls[1] as unknown as [string, RequestInit])[1].body)) as {
+      messages: { content: { text?: string }[] }[];
+    };
+    expect(second.messages[0]!.content.at(-1)!.text).toContain('Categorías ya definidas: Poses, Texturas');
+    // «Entorno» es nueva y cabe; «nada de esto» también cabe (hay cupo), así que se acepta tal cual
+    expect(result.assignments['i20']).toBe('Poses');
+    expect(result.assignments['i21']).toBe('Entorno');
+    expect(result.assignments['i22']).toBe('Nada de esto');
+    expect(result.categories).toEqual(['Poses', 'Texturas', 'Entorno', 'Nada de esto']);
+    expect(usage.inputTokens).toBe(2000);
+  });
+
+  it('en modo ad hoc no pasa del máximo de categorías: el resto va a Otros', async () => {
+    const cats = Array.from({ length: MAX_AD_HOC_CATEGORIES + 3 }, (_, k) => `Cat ${k}`);
+    const a: Record<string, string> = {};
+    cats.forEach((c, k) => (a[`i${k}`] = c));
+    mockFetch(() => okResponse(JSON.stringify({ categories: cats, assignments: a })));
+    const { result } = await classifyImages({ images: imgs(cats.length), categories: [], lang: 'en' });
+    expect(result.categories.length).toBe(MAX_AD_HOC_CATEGORIES + 1);
+    expect(result.categories.at(-1)).toBe('Other');
+    expect(result.assignments[`i${MAX_AD_HOC_CATEGORIES}`]).toBe('Other');
+  });
+
+  it('las imágenes que la IA omite van a Otros', async () => {
+    mockFetch(() => okResponse('{"assignments":{"i0":"Poses"}}'));
+    const { result } = await classifyImages({ images: imgs(2), categories: ['Poses'], lang: 'es' });
+    expect(result.assignments).toEqual({ i0: 'Poses', i1: 'Otros' });
+  });
+
+  it('normalizeCategory limpia y capitaliza', () => {
+    expect(normalizeCategory('  #texturas   de piel. ')).toBe('Texturas de piel');
+    expect(normalizeCategory('')).toBeNull();
+    expect(normalizeCategory(42)).toBeNull();
+    expect(normalizeCategory('x'.repeat(60))!.length).toBe(40);
   });
 });
