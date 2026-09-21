@@ -29,6 +29,7 @@ import type { Store } from '../core/store';
 import { appSettings } from '../core/settings';
 import { HANDLE_SIZE, screenToScene, type HandleId, type Renderer } from '../render/renderer';
 import { snapToGrid } from '../features/arrange';
+import { MAX_ZOOM, MIN_ZOOM, fitViewport, type Insets } from '../features/viewport';
 
 export type Tool = 'select' | 'pan' | 'lasso' | 'draw' | 'crop';
 
@@ -65,8 +66,7 @@ const TAP_MOVE_TOUCH = 10;
 const TAP_MOVE_MOUSE = 4;
 const LONG_PRESS_MS = 480;
 const DOUBLE_TAP_MS = 320;
-const MIN_ZOOM = 0.02;
-const MAX_ZOOM = 40;
+
 
 export class GestureController {
   tool: Tool = 'select';
@@ -862,26 +862,49 @@ export class GestureController {
     this.renderer.requestDraw();
   }
 
-  fitRect(r: Rect | null, padding = 40) {
-    if (!r || r.w <= 0 || r.h <= 0) {
-      this.store.setViewport({ x: this.renderer.width / 2, y: this.renderer.height / 2, zoom: 1 });
-      this.renderer.requestDraw();
-      return;
+  /** Tamaño del lienzo en píxeles CSS. */
+  viewSize(): { w: number; h: number } {
+    return { w: this.renderer.width, h: this.renderer.height };
+  }
+
+  /**
+   * Franjas que tapan las barras flotantes (superior, herramientas, subbarra y
+   * panel de jerarquía). Se miden del DOM, así que valen igual en iPhone, en
+   * iPad y con el área segura de la pantalla.
+   */
+  viewInsets(): Insets {
+    const base = 16;
+    const ins: Insets = { top: base, right: base, bottom: base, left: base };
+    const c = this.canvas.getBoundingClientRect();
+    for (const sel of ['#top-bar', '#toolbar', '#sub-bar', '#hierarchy']) {
+      const el = document.querySelector<HTMLElement>(sel);
+      if (!el || el.hidden) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      // barra horizontal (ancha y baja) o panel lateral
+      if (r.width >= r.height) {
+        if (r.top + r.height / 2 < c.top + c.height / 2) ins.top = Math.max(ins.top, r.bottom - c.top + 8);
+        else ins.bottom = Math.max(ins.bottom, c.bottom - r.top + 8);
+      } else {
+        if (r.left + r.width / 2 < c.left + c.width / 2) ins.left = Math.max(ins.left, r.right - c.left + 8);
+        else ins.right = Math.max(ins.right, c.right - r.left + 8);
+      }
     }
-    const zw = (this.renderer.width - padding * 2) / r.w;
-    const zh = (this.renderer.height - padding * 2) / r.h;
-    const zoom = clamp(Math.min(zw, zh), MIN_ZOOM, MAX_ZOOM);
-    this.store.setViewport({
-      zoom,
-      x: this.renderer.width / 2 - (r.x + r.w / 2) * zoom,
-      y: this.renderer.height / 2 - (r.y + r.h / 2) * zoom
-    });
+    return ins;
+  }
+
+  fitRect(r: Rect | null, padding = 0) {
+    this.store.setViewport(fitViewport(r, this.viewSize(), this.viewInsets(), padding));
     this.renderer.requestDraw();
   }
 
+  /** Caja de todo lo visible del tablero (sin grupos, que no pintan nada). */
+  contentBounds(): Rect | null {
+    return unionRects(this.store.scene.items.filter((i) => i.kind !== 'group' && i.visible).map(itemBounds));
+  }
+
   fitToView() {
-    const rects = this.store.scene.items.filter((i) => i.kind !== 'group' && i.visible).map(itemBounds);
-    this.fitRect(unionRects(rects));
+    this.fitRect(this.contentBounds());
   }
 
   fitSelection() {

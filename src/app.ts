@@ -54,6 +54,7 @@ import { copyBlobToSystemClipboard, copyItems, duplicateItems, hasInternalClip, 
 import { exportSceneFile, importSceneFile, inspectZip, sceneFileName } from './features/sceneFile';
 import { findDuplicateGroups, findSimilar } from './features/phash';
 import { centerPoints, chainConnectors, defaultOrnamentSize, inkColor } from './features/ornaments';
+import { recenterOnResize, shouldRefit } from './features/viewport';
 import { isImageFile, isZipFile } from './features/imageTools';
 import { getBlob } from './core/persistence';
 import { toast, promptDialog, confirmDialog, saveDiscardDialog, closeMenus, clearOverlays } from './ui/dialogs';
@@ -130,7 +131,7 @@ export class App {
     });
     onBitmapReady(() => this.renderer.requestDraw());
 
-    new ResizeObserver(() => this.renderer.resize()).observe(this.canvas);
+    new ResizeObserver(() => this.onCanvasResize()).observe(this.canvas);
     this.renderer.resize();
     this.bindKeyboard();
     this.bindClipboardAndDrop();
@@ -141,6 +142,29 @@ export class App {
     void requestPersistence();
     // sincronización entre dispositivos (sólo actúa si el usuario configuró su cuenta)
     void initSync(this);
+  }
+
+  /**
+   * El lienzo cambió de tamaño: rotación del dispositivo, Split View o la
+   * barra de Safari que aparece y desaparece.
+   *
+   * `viewport.x/y` está en píxeles del lienzo, así que sin corregirlo el
+   * tablero se va a una esquina al rotar. Si se estaba viendo entero y
+   * encuadrado, se vuelve a encuadrar; si el usuario tenía el zoom puesto en
+   * algo, se respeta y sólo se mantiene centrado lo que ya estaba al centro.
+   */
+  private onCanvasResize() {
+    const prev = this.gestures.viewSize();
+    const before = this.store.scene.viewport;
+    const bounds = this.gestures.contentBounds();
+    const refit = prev.w > 0 && shouldRefit(bounds, before, prev, this.gestures.viewInsets());
+
+    this.renderer.resize();
+
+    const next = this.gestures.viewSize();
+    if (prev.w <= 0 || prev.h <= 0 || (prev.w === next.w && prev.h === next.h)) return;
+    if (refit) this.gestures.fitToView();
+    else this.store.setViewport(recenterOnResize(before, prev, next));
   }
 
   applyTheme() {

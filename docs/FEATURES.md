@@ -136,6 +136,14 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 | Separación de alineación (padding) configurable | ✅ | `scene.settings.alignPadding`, en Ajustes |
 | Alinear con padding 0 sin dejar huecos (fix 2.1.3) | ✅ | `alignItems()` con `padding` 0 no reordena ni separa |
 
+## Encuadre y rotación
+
+| PureRef | Estado | Detalle |
+|---|---|---|
+| Ajustar a la vista / a la selección | ✅ | `zoom_fit` `Mod+1`, `zoom_selection` `Mod+2` (`src/features/viewport.ts`) |
+| Encuadre que respeta las barras flotantes | ➕ | El ajuste usa el área libre entre la barra superior, la de herramientas, la subbarra y el panel de jerarquía, medidas del DOM, así que nada queda debajo de ellas ni bajo el área segura de iOS |
+| Rotar el dispositivo sin perder el tablero | ➕ | Al cambiar el tamaño del lienzo (rotación, Split View, la barra de Safari) se mantiene centrado lo que estaba al centro; si se veía el tablero completo y encuadrado, se vuelve a encuadrar, y si había zoom puesto en un detalle, se respeta |
+
 ## Archivo, exportación y portapapeles
 
 | PureRef | Estado | Detalle |
