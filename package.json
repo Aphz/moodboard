@@ -16,6 +16,7 @@
     "cap:open:ios": "cap open ios"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "fflate": "^0.8.2",
     "idb": "^8.0.0"
   },

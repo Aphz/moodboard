@@ -13,7 +13,7 @@ import {
   descendantsOf,
   hitTest,
   itemBounds,
-  paintOrder,
+  renderOrder,
   rectContains,
   rectsIntersect,
   subtreeBounds,
@@ -122,7 +122,7 @@ export class GestureController {
   /** Ítem más alto bajo el punto (escena). Devuelve el ítem "seleccionable" (grupo raíz si aplica). */
   hitItem(scene: Point, opts: { ignore?: Set<ItemId>; raw?: boolean } = {}): Item | null {
     const s = this.store.scene;
-    const order = paintOrder(s);
+    const order = renderOrder(s);
     const hiddenSub = new Set<ItemId>();
     for (const it of s.items) if (!it.visible) for (const d of descendantsOf(s, it.id)) hiddenSub.add(d.id);
     for (let i = order.length - 1; i >= 0; i--) {
@@ -192,6 +192,16 @@ export class GestureController {
       this.store.cancelTransaction();
       this.inTx = false;
     }
+  }
+
+  /** Vuelve al estado inactivo limpiando cualquier resto visual de la interacción. */
+  private idle() {
+    this.mode = { kind: 'none' };
+    this.renderer.overlay.hideGizmo = false;
+    this.renderer.overlay.lasso = null;
+    this.renderer.overlay.hoverId = null;
+    this.renderer.overlay.liveStroke = null;
+    this.renderer.overlay.interacting = false;
   }
 
   private movedIdsFor(roots: Item[]): ItemId[] {
@@ -312,6 +322,7 @@ export class GestureController {
         return;
       }
       case 'pan':
+        this.renderer.overlay.interacting = true;
         this.store.setViewport({ x: v.x + (p.x - prev.x), y: v.y + (p.y - prev.y) });
         break;
       case 'lasso': {
@@ -382,44 +393,46 @@ export class GestureController {
           }
           this.store.select([...new Set(ids)], m.additive ? 'add' : 'replace');
         }
-        this.mode = { kind: 'none' };
+        this.idle();
+        // el lazo es de un solo uso: al terminar vuelve a la herramienta de selección
+        if (this.tool === 'lasso') this.setTool('select');
         break;
       }
       case 'move': {
         this.finishMove(m);
-        this.mode = { kind: 'none' };
+        this.idle();
         break;
       }
       case 'handle':
-        this.renderer.overlay.hideGizmo = false;
         this.endTx();
-        this.mode = { kind: 'none' };
+        this.idle();
         break;
       case 'pinch':
-        if (this.pointers.size < 2) this.mode = this.pointers.size === 1 ? { kind: 'pan' } : { kind: 'none' };
+        if (this.pointers.size === 1) {
+          this.mode = { kind: 'pan' };
+          this.renderer.overlay.hideGizmo = false;
+        } else if (this.pointers.size === 0) this.idle();
         break;
       case 'pinchItems':
         if (this.pointers.size < 2) {
-          this.renderer.overlay.hideGizmo = false;
           this.endTx();
-          this.mode = { kind: 'none' };
           this.pointers.clear();
+          this.idle();
         }
         break;
       case 'draw':
         if (e.pointerId === m.pointerId) {
-          this.renderer.overlay.liveStroke = null;
-          this.mode = { kind: 'none' };
+          this.idle();
           if (m.stroke.points.length > 0) this.cb.onStrokeEnd(m.stroke, m.origin);
         }
         break;
       case 'crop':
         this.endTx();
         this.cb.onCropChange();
-        this.mode = { kind: 'none' };
+        this.idle();
         break;
       case 'pan':
-        if (this.pointers.size === 0) this.mode = { kind: 'none' };
+        if (this.pointers.size === 0) this.idle();
         break;
     }
     this.renderer.requestDraw();
@@ -431,10 +444,12 @@ export class GestureController {
     if (m.kind === 'pending') clearTimeout(m.timer);
     if (m.kind === 'draw') this.renderer.overlay.liveStroke = null;
     if (m.kind === 'move' || m.kind === 'handle' || m.kind === 'pinchItems' || m.kind === 'crop') this.cancelTx();
-    this.renderer.overlay.lasso = null;
-    this.renderer.overlay.hoverId = null;
-    this.renderer.overlay.hideGizmo = false;
-    if (this.pointers.size === 0) this.mode = { kind: 'none' };
+    if (this.pointers.size === 0) this.idle();
+    else {
+      this.renderer.overlay.lasso = null;
+      this.renderer.overlay.hoverId = null;
+      this.renderer.overlay.hideGizmo = false;
+    }
     this.renderer.requestDraw();
   };
 
@@ -736,6 +751,8 @@ export class GestureController {
       return;
     }
     if (m.kind === 'move' || m.kind === 'handle') this.cancelTx();
+    this.renderer.overlay.hideGizmo = false;
+    this.renderer.overlay.interacting = true;
     this.mode = { kind: 'pinch', startZoom: v.zoom, startView: { x: v.x, y: v.y }, startCenter: center, startDist: dist };
   }
 

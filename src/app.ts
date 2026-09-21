@@ -67,6 +67,7 @@ import { Toolbar } from './ui/toolbar';
 import { HierarchyPanel } from './ui/hierarchy';
 import { SubBar } from './ui/subBar';
 import { isTouchDevice } from './ui/dom';
+import { initSync } from './sync';
 
 export class App {
   store: Store = store;
@@ -131,6 +132,8 @@ export class App {
 
     await this.loadLastScene();
     void requestPersistence();
+    // sincronización entre dispositivos (sólo actúa si el usuario configuró su cuenta)
+    void initSync(this);
   }
 
   applyTheme() {

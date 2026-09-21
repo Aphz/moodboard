@@ -22,6 +22,7 @@ export interface AppSettings {
   pencilOnlyDraw: boolean;
   /** Clave API opcional para funciones IA (se guarda sólo en este dispositivo) */
   aiApiKey: string;
+  /** Modelo de Claude a usar; si no está en la tabla de precios se usa el por defecto */
   aiModel: string;
 }
 
@@ -37,7 +38,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pencilPressure: true,
   pencilOnlyDraw: true,
   aiApiKey: '',
-  aiModel: 'claude-sonnet-5'
+  // Haiku 4.5: el modelo más barato de la tabla de src/ai/pricing.ts (DEFAULT_AI_MODEL).
+  aiModel: 'claude-haiku-4-5'
 };
 
 export let appSettings: AppSettings = { ...DEFAULT_SETTINGS };

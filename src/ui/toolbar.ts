@@ -5,14 +5,16 @@ import type { ItemId, Point } from '../core/model';
 import { t } from '../i18n';
 import { h, svg, clear } from './dom';
 import { icons } from './icons';
-import { showMenu, type MenuEntry } from './dialogs';
+import { showMenu, toast, type MenuEntry } from './dialogs';
 import { aiAvailable } from '../ai/claude';
+import { syncStatusIcon } from './accountDialog';
 
 export class Toolbar {
   private top = document.getElementById('top-bar')!;
   private bottom = document.getElementById('toolbar')!;
   private titleEl!: HTMLElement;
   private buttons = new Map<string, HTMLButtonElement>();
+  private syncIcon: { el: HTMLElement; destroy(): void } | null = null;
 
   constructor(private app: App) {
     this.rebuild();
@@ -23,6 +25,8 @@ export class Toolbar {
     clear(this.top);
     clear(this.bottom);
     this.buttons.clear();
+    this.syncIcon?.destroy();
+    this.syncIcon = syncStatusIcon();
     const S = this.app.store;
 
     // --- superior
@@ -39,6 +43,7 @@ export class Toolbar {
       { class: 'pill' },
       this.tb('search', 'search', () => runCommand('command_palette')),
       this.tb('layers', 'layers', () => runCommand('toggle_hierarchy')),
+      this.syncIcon.el,
       this.tb('more', 'more', (e) => this.showMainMenu(e.currentTarget as HTMLElement))
     );
     this.top.append(left, h('div', { class: 'spacer' }), right);
@@ -49,7 +54,7 @@ export class Toolbar {
       this.tb('plus', 'plus', (e) => this.showAddMenu(e.currentTarget as HTMLElement)),
       h('div', { class: 'sep' }),
       this.tb('select', 'select', () => runCommand('tool_select')),
-      this.tb('multi', 'multi', () => this.toggleMulti()),
+      modifier(this.tb('multi', 'multi', () => this.toggleMulti())),
       phone(this.tb('lasso', 'lasso', () => runCommand('tool_lasso'))),
       phone(this.tb('hand', 'hand', () => runCommand('tool_pan'))),
       h('div', { class: 'sep' }),
@@ -68,12 +73,27 @@ export class Toolbar {
     this.refresh();
   }
 
+  private hints = new Map<string, () => string | null>();
+
   private tb(id: string, icon: string, onClick: (e: MouseEvent) => void, title?: string): HTMLButtonElement {
     const btn = h('button', { class: 'tb', title: title ?? '', 'aria-label': title ?? id }, svg(icons[icon]));
-    btn.addEventListener('click', onClick);
+    btn.addEventListener('click', (e) => {
+      // un botón "apagado" sigue respondiendo: explica qué falta en vez de no hacer nada
+      const hint = this.hints.get(id)?.();
+      if (hint) {
+        toast(hint, { ms: 1600 });
+        return;
+      }
+      onClick(e);
+    });
     btn.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.buttons.set(id, btn);
     return btn;
+  }
+
+  /** Registra el motivo por el que un botón está apagado (si devuelve texto, el botón se ve atenuado). */
+  private hint(id: string, fn: () => string | null) {
+    this.hints.set(id, fn);
   }
 
   private toggleMulti() {
@@ -87,25 +107,29 @@ export class Toolbar {
     if (!this.titleEl) return;
     this.titleEl.textContent = S.scene.name;
     this.titleEl.classList.toggle('dirty', S.dirty);
-    const set = (id: string, active: boolean, disabled = false) => {
+    const set = (id: string, active: boolean) => {
       const b = this.buttons.get(id);
       if (!b) return;
       b.classList.toggle('active', active);
-      b.disabled = disabled;
+      b.classList.toggle('dim', !!this.hints.get(id)?.());
     };
+    this.hint('crop', () => (g.tool === 'crop' || S.selectedItems().filter((i) => i.kind === 'image').length === 1 ? null : t('ui_hint_crop_one_image')));
+    this.hint('undo', () => (S.canUndo ? null : t('ui_hint_nothing_undo')));
+    this.hint('redo', () => (S.canRedo ? null : t('ui_hint_nothing_redo')));
+    this.hint('selmenu', () => (S.selection.size ? null : t('ui_hint_select_first')));
     set('select', g.tool === 'select');
     set('lasso', g.tool === 'lasso');
     set('hand', g.tool === 'pan');
     set('pen', g.tool === 'draw');
-    set('crop', g.tool === 'crop', S.selectedItems().filter((i) => i.kind === 'image').length !== 1);
+    set('crop', g.tool === 'crop');
     set('multi', g.multiSelect);
-    set('undo', false, !S.canUndo);
-    set('redo', false, !S.canRedo);
+    set('undo', false);
+    set('redo', false);
     set('grid', S.scene.settings.grid.enabled);
     set('layers', !this.app.hierarchy?.hidden);
     const selBtn = this.buttons.get('selmenu');
     if (selBtn) {
-      selBtn.disabled = S.selection.size === 0;
+      set('selmenu', false);
       let badge = selBtn.querySelector('.badge');
       if (S.selection.size > 0) {
         if (!badge) {
@@ -298,6 +322,12 @@ export class Toolbar {
   allEntries() {
     return allCommands();
   }
+}
+
+/** Marca un botón como modificador (no herramienta): activo se muestra con anillo, no relleno. */
+function modifier<T extends HTMLElement>(el: T): T {
+  el.classList.add('modifier');
+  return el;
 }
 
 /** Marca un botón como secundario: en teléfonos se oculta (CSS) y queda en los menús. */

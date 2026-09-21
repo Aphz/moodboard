@@ -75,7 +75,44 @@ export async function putBlob(id: string, blob: Blob, w: number, h: number): Pro
   await d.put('blobs', { id, blob, w, h, type: blob.type });
 }
 
+/**
+ * Proveedor remoto opcional: si un blob no está en IndexedDB se le pide
+ * (p. ej. a la nube tras sincronizar) y se guarda localmente.
+ */
+export type RemoteBlobProvider = (id: string) => Promise<{ blob: Blob; w: number; h: number } | null>;
+let remoteBlobProvider: RemoteBlobProvider | null = null;
+const remoteInFlight = new Map<string, Promise<Blob | null>>();
+
+export function setRemoteBlobProvider(p: RemoteBlobProvider | null) {
+  remoteBlobProvider = p;
+}
+
 export async function getBlob(id: string): Promise<Blob | null> {
+  const d = await db();
+  const r = await d.get('blobs', id);
+  if (r?.blob) return r.blob;
+  if (!remoteBlobProvider) return null;
+  let p = remoteInFlight.get(id);
+  if (!p) {
+    p = (async () => {
+      try {
+        const res = await remoteBlobProvider!(id);
+        if (!res) return null;
+        await putBlob(id, res.blob, res.w, res.h);
+        return res.blob;
+      } catch {
+        return null;
+      } finally {
+        remoteInFlight.delete(id);
+      }
+    })();
+    remoteInFlight.set(id, p);
+  }
+  return p;
+}
+
+/** Sólo local, sin consultar al proveedor remoto. */
+export async function getLocalBlob(id: string): Promise<Blob | null> {
   const d = await db();
   const r = await d.get('blobs', id);
   return r?.blob ?? null;
