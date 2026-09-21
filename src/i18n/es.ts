@@ -307,6 +307,9 @@ export const es = {
   ui_sync_state_synced: 'Al día',
   ui_sync_state_offline: 'Sin conexión',
   ui_sync_state_error: 'Error',
+  ui_sync_state_expired: 'Sesión caducada',
+  ui_sync_expired_hint: 'La sesión de Google dura una hora en Safari. Se renueva sola con tu próximo toque; no vuelve a pedir permisos, sólo abre una ventana que se cierra al instante.',
+  ui_sync_renew: 'Renovar sesión',
   // build sin ID de cliente (modo desarrollador)
   ui_sync_no_client_id: 'Esta versión de la app no trae la sincronización habilitada: le falta el ID de cliente de Google. Tus tableros siguen guardados en este dispositivo.',
   ui_sync_advanced: 'Avanzado',

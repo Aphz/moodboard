@@ -44,7 +44,7 @@ export { mergeScenes, sceneDigest } from './merge';
 export { ROOT_FOLDER_NAME, extForMime, mimeForName, parseModifiedTime } from './gdrive';
 
 /** Estados observables de la sincronización (`'off'` = build sin ID de cliente). */
-export type SyncState = 'off' | 'signed-out' | 'syncing' | 'synced' | 'offline' | 'error';
+export type SyncState = 'off' | 'signed-out' | 'expired' | 'syncing' | 'synced' | 'offline' | 'error';
 
 /** Sesión de Google guardada en IndexedDB (sobrevive a recargar la app). */
 export interface GoogleToken {
@@ -87,6 +87,8 @@ const FOCUS_THROTTLE_MS = 3000;
 const TOKEN_SKEW_MS = 60000;
 /** Tiempo máximo de espera de una renovación silenciosa. */
 const SILENT_TIMEOUT_MS = 8000;
+/** Tiempo máximo de una renovación con gesto del usuario (puede pedir login). */
+const INTERACTIVE_TIMEOUT_MS = 120_000;
 
 const KV_TOKEN = 'gdriveToken';
 const KV_LAST_SYNC = 'lastSyncAt';
@@ -129,6 +131,11 @@ interface Gis {
 let app: App | null = null;
 let drive: Drive | null = null;
 let token: GoogleToken | null = null;
+/** Correo de la sesión cuyo token venció (estado `'expired'`). */
+let expiredEmail = '';
+/** Hay oyentes de gesto esperando para renovar. */
+let gestureArmed = false;
+let renewing = false;
 let tokenClient: GisTokenClient | null = null;
 let gisPromise: Promise<Gis> | null = null;
 /** Resolución pendiente de `requestAccessToken` (sólo una a la vez). */
@@ -184,8 +191,9 @@ export function isConnected(): boolean {
   return !!token && !!drive;
 }
 
-/** Usuario con sesión de Google iniciada, o null. */
+/** Usuario con sesión de Google iniciada (o vencida, pendiente de renovar), o null. */
 export function getSyncUser(): { email: string } | null {
+  if (!token && expiredEmail) return { email: expiredEmail };
   return token ? { email: token.email } : null;
 }
 
@@ -216,6 +224,11 @@ function setState(s: SyncState) {
 }
 
 function fail(e: unknown) {
+  if (!token && expiredEmail) {
+    // la sesión venció en medio de una operación: el estado que importa es ése
+    setState('expired');
+    return;
+  }
   errorMsg = describeSyncError(e);
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     setState('offline');
@@ -342,7 +355,7 @@ async function ensureTokenClient(): Promise<GisTokenClient> {
  * puede bloquearlo, y entonces se devuelve `null` y el estado pasa a
  * `'signed-out'` con el aviso de volver a conectar.
  */
-async function requestToken(silent: boolean): Promise<GoogleToken | null> {
+async function requestToken(silent: boolean, timeoutMs = SILENT_TIMEOUT_MS): Promise<GoogleToken | null> {
   if (!hasClientId()) return null;
   const client = await ensureTokenClient();
   const response = await new Promise<GisTokenResponse | null>((resolve) => {
@@ -353,7 +366,7 @@ async function requestToken(silent: boolean): Promise<GoogleToken | null> {
       resolve(r);
     };
     pendingToken = finish;
-    if (silent) window.setTimeout(() => finish(null), SILENT_TIMEOUT_MS);
+    if (silent) window.setTimeout(() => finish(null), timeoutMs);
     try {
       client.requestAccessToken(silent ? { prompt: '' } : undefined);
     } catch {
@@ -365,9 +378,10 @@ async function requestToken(silent: boolean): Promise<GoogleToken | null> {
   const next: GoogleToken = {
     token: response.access_token,
     exp: Date.now() + (Number.isFinite(seconds) ? seconds : 3600) * 1000,
-    email: token?.email ?? ''
+    email: token?.email || expiredEmail || ''
   };
   if (!next.email) next.email = await fetchEmail(next.token);
+  expiredEmail = '';
   token = next;
   await setKV(KV_TOKEN, next);
   return next;
@@ -391,21 +405,78 @@ const tokens: TokenSource = {
   }
 };
 
-/** Renovación silenciosa; si falla, se corta la sesión con un aviso claro. */
+/**
+ * Renovación silenciosa. Safari (y las PWA en iOS) bloquean la ventana de
+ * Google si no hay un gesto del usuario, así que al fallar la sesión no se
+ * corta: pasa a `'expired'` y se renueva en el próximo toque.
+ */
 async function renew(): Promise<GoogleToken | null> {
   try {
     const next = await requestToken(true);
     if (next) return next;
   } catch {
-    /* tratado abajo como sesión caída */
+    /* tratado abajo como sesión vencida */
   }
-  await forgetSession(t('ui_sync_err_reconnect'));
+  await expire(token?.email ?? expiredEmail);
   return null;
+}
+
+/** Deja la sesión como vencida (se conserva el correo) y espera un gesto. */
+async function expire(email: string): Promise<void> {
+  token = null;
+  expiredEmail = email;
+  await stop();
+  errorMsg = t('ui_sync_expired_hint');
+  setState('expired');
+  armGestureRenewal();
+}
+
+/**
+ * En el próximo toque o tecla del usuario intenta renovar sin consentimiento
+ * (`prompt: ''`): con la sesión de Google viva la ventana se cierra sola.
+ */
+function armGestureRenewal(): void {
+  if (gestureArmed || typeof document === 'undefined') return;
+  gestureArmed = true;
+  const handler = () => {
+    document.removeEventListener('pointerup', handler, true);
+    document.removeEventListener('keydown', handler, true);
+    gestureArmed = false;
+    void renewSession();
+  };
+  document.addEventListener('pointerup', handler, true);
+  document.addEventListener('keydown', handler, true);
+}
+
+/**
+ * Renueva la sesión vencida sin volver a pedir permisos. Debe llamarse desde
+ * un gesto del usuario (clic o toque). Si Google no responde, la sesión se
+ * corta con el aviso de volver a conectar.
+ */
+export async function renewSession(): Promise<boolean> {
+  if (renewing || !hasClientId() || !expiredEmail) return false;
+  renewing = true;
+  try {
+    setState('syncing');
+    const next = await requestToken(true, INTERACTIVE_TIMEOUT_MS);
+    if (!next) {
+      await forgetSession(t('ui_sync_err_reconnect'));
+      return false;
+    }
+    await start();
+    return true;
+  } catch (e) {
+    fail(e);
+    return false;
+  } finally {
+    renewing = false;
+  }
 }
 
 /** Olvida la sesión local y deja el estado en `'signed-out'`. */
 async function forgetSession(message = ''): Promise<void> {
   token = null;
+  expiredEmail = '';
   await stop();
   errorMsg = message;
   setState(hasClientId() ? 'signed-out' : 'off');
@@ -441,11 +512,10 @@ export async function initSync(appRef: App): Promise<void> {
       await start();
       return;
     }
-    // había sesión pero el token venció: GIS puede renovarla sin molestar
-    token = saved;
-    setState('signed-out');
+    // había sesión pero el token venció: sin gesto del usuario Safari no deja
+    // abrir la ventana de Google, así que se espera al primer toque
     void ensureGis().catch(() => undefined);
-    if (await renew()) await start();
+    await expire(saved.email);
   } catch (e) {
     fail(e);
   }

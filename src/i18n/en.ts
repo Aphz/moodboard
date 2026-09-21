@@ -309,6 +309,9 @@ export const en: Record<keyof typeof es, string> = {
   ui_sync_state_synced: 'Up to date',
   ui_sync_state_offline: 'Offline',
   ui_sync_state_error: 'Error',
+  ui_sync_state_expired: 'Session expired',
+  ui_sync_expired_hint: 'The Google session lasts one hour in Safari. It renews itself on your next tap; no permissions are asked again, just a window that closes at once.',
+  ui_sync_renew: 'Renew session',
   // build without a client ID (developer mode)
   ui_sync_no_client_id: 'This build does not have sync enabled: it is missing the Google client ID. Your boards are still saved on this device.',
   ui_sync_advanced: 'Advanced',

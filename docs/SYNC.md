@@ -218,6 +218,13 @@ tiene prioridad.
 - **Errores**: un 401 renueva el token una vez; los 403 por cuota, los 429 y
   los 5xx se reintentan con espera exponencial (3 intentos). El usuario solo
   ve mensajes traducidos.
+- **Token vencido (cada hora)**: el token de Google dura una hora y Safari
+  (también la PWA en iOS) no deja abrir la ventana de renovación sin un gesto
+  del usuario. El estado pasa a *Sesión caducada* conservando el correo, y en
+  el próximo toque o tecla se renueva con `prompt: ''` (sin volver a pedir
+  permisos: la ventana se cierra sola). En el diálogo de la nube hay además
+  un botón *Renovar sesión*. Sólo si Google no responde se vuelve a *Sin
+  conectar*.
 
 ## Límites y privacidad
 

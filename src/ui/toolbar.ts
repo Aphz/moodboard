@@ -163,6 +163,7 @@ export class Toolbar {
     const entries: MenuEntry[] = [
       this.entry('import_images'),
       this.entry('import_url'),
+      this.entry('import_pinterest'),
       this.entry('paste'),
       { sep: true },
       this.entry('tool_note'),
@@ -221,6 +222,7 @@ export class Toolbar {
       this.entry('save'),
       this.entry('rename_scene'),
       { sep: true },
+      this.entry('import_pinterest'),
       this.entry('export_png'),
       this.entry('export_scene_file'),
       this.entry('manage_images'),
