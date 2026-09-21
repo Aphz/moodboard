@@ -6,25 +6,34 @@ proyecto **tuyo** de [Supabase](https://supabase.com) (plan gratuito).
 
 Los datos quedan en tu proyecto: nosotros no vemos ni guardamos nada.
 
-Tiempo estimado: **5 minutos**.
+**No hace falta el correo electrónico en ningún momento**: la cuenta se crea
+con correo y contraseña, sin códigos ni enlaces mágicos. Y el asistente de la
+app comprueba cada paso por ti (✅ / ❌ / ⏳) y te dice exactamente qué falta.
+
+Tiempo estimado: **5 minutos**, y sólo en el primer dispositivo.
 
 ---
 
-## 1. Crear el proyecto (1 min)
+## En Supabase: tres pasos
+
+### 1. Crear el proyecto
 
 1. Entra a <https://supabase.com> y crea una cuenta gratis.
 2. **New project**. Ponle el nombre que quieras (por ejemplo `moodboard`),
    elige una contraseña para la base de datos y la región más cercana.
-3. Espera a que termine de aprovisionarse (aparece "Project is ready").
+3. Espera a que aparezca *Project is ready*.
 
-## 2. Ejecutar el esquema SQL (1 min)
+### 2. Ejecutar el SQL (un solo pegado)
 
-1. En el menú lateral, abre **SQL Editor** → **New query**.
-2. Copia el contenido completo de [`supabase/schema.sql`](../supabase/schema.sql)
-   y pégalo en el editor.
-3. Pulsa **Run**. Debería decir *Success*.
+1. Menú lateral → **SQL Editor** → **New query**.
+2. Pega el contenido completo de [`supabase/schema.sql`](../supabase/schema.sql)
+   y pulsa **Run**. Debería decir *Success*.
 
-Eso crea:
+   En la app, el paso 3 del asistente trae el botón **Copiar SQL**: copia ese
+   mismo archivo al portapapeles y el botón de al lado abre este editor.
+
+El script es idempotente (puedes volver a ejecutarlo) y deja listo todo de una
+vez:
 
 - la tabla `scenes` (una fila por tablero, con el JSON de la escena),
 - las políticas **RLS** para que cada usuario sólo vea sus propias filas,
@@ -32,55 +41,63 @@ Eso crea:
 - la publicación de **Realtime** sobre `scenes`, que es lo que hace que los
   cambios aparezcan en vivo en el otro dispositivo.
 
-## 3. Verificar el bucket `blobs` (30 s)
-
-El script ya lo crea, pero conviene revisarlo:
-
-1. Menú lateral → **Storage**.
-2. Debe existir un bucket llamado `blobs` y **no** debe decir *Public*.
-   Si no existe, créalo con **New bucket** → nombre `blobs` → deja
-   *Public bucket* **desactivado** → **Create**.
-
-Dentro del bucket, cada imagen se guarda en `blobs/<tu-user-id>/<blobId>`.
-Las políticas RLS impiden que alguien entre a la carpeta de otro usuario.
-
-## 4. Activar el inicio de sesión con código por correo (1 min)
-
-Moodboard entra con un **código de un solo uso** (OTP) enviado a tu correo,
-no con contraseña ni con enlace mágico.
+### 3. Desactivar "Confirm email"
 
 1. Menú lateral → **Authentication** → **Sign In / Providers** → **Email**.
 2. Deja **Enable Email provider** activado.
-3. Desactiva **Confirm email** (así el primer inicio de sesión no exige
-   confirmar antes de entrar).
+3. Desactiva **Confirm email** → **Save**.
 
-   Si prefieres dejar esa opción activada, entonces edita la plantilla del
-   correo: **Authentication** → **Emails** → **Magic Link** (y también
-   *Confirm signup*), y asegúrate de que el cuerpo incluya el token:
+Así la cuenta queda creada y con sesión iniciada al instante, sin esperar
+ningún correo. Es el paso clave: el correo de cortesía de Supabase sólo
+permite unos pocos mensajes por hora y no sirve para esto.
 
-   ```html
-   <p>Tu código para Moodboard es: <b>{{ .Token }}</b></p>
-   ```
+En la app, el paso 2 del asistente comprueba esto solo y trae un botón que
+abre esta misma página del panel.
 
-   Si la plantilla sólo trae `{{ .ConfirmationURL }}`, recibirás un enlace en
-   vez de un código y la app no podrá completar el inicio de sesión.
+---
 
-4. (Opcional) En **Authentication** → **URL Configuration** no hace falta
-   tocar nada: la app no usa redirecciones.
+## En la app: URL, clave y contraseña
 
-## 5. Copiar URL y clave anon a la app (1 min)
+### 4. Pegar la URL y la clave anon
 
-1. Menú lateral → **Project Settings** → **API** (o **Data API**).
-2. Copia:
+1. En Supabase: **Project Settings** → **API** (o **Data API**). Copia:
    - **Project URL** — algo como `https://abcdefghijkl.supabase.co`
    - **anon public** — una cadena larga que empieza con `eyJ…`
-3. En Moodboard, toca el icono de **nube** en la barra superior.
-4. Pega la URL y la clave anon → **Guardar configuración**.
-5. Escribe tu correo → **Enviar código** → revisa tu bandeja → escribe el
-   código de 6 dígitos → **Entrar**.
+2. En Moodboard, toca el icono de **nube** de la barra superior.
+3. Pega las dos cosas en el **paso 1** y pulsa **Probar**.
 
-Repite el paso 5 en el otro dispositivo **con el mismo correo**. En unos
-segundos verás los mismos tableros en los dos.
+Si la URL o la clave están mal, el asistente te lo dice en castellano ("La
+clave anon no sirve…", "No pudimos conectar con esa URL…"). Si están bien, se
+guardan solas y los pasos 2 y 3 se comprueban al tiro.
+
+### 5. Crear la cuenta con contraseña
+
+En el **paso 4**, escribe tu correo y una contraseña de **al menos 8
+caracteres**, y pulsa **Entrar o crear cuenta**.
+
+- La primera vez, la cuenta se crea y entras de inmediato.
+- Las siguientes, entras con la misma contraseña.
+- Si te equivocas de contraseña, la app avisa que esa cuenta ya existe y la
+  contraseña no coincide.
+
+### 6. Pasar la configuración al otro dispositivo
+
+En el dispositivo que ya quedó funcionando, abre el diálogo de la nube y pulsa
+**Enviar configuración al otro dispositivo**. La app arma un enlace como:
+
+```
+https://aphz.github.io/moodboard/#setup=eyJ1cmwiOi…
+```
+
+y lo comparte (hoja de compartir de iOS) o lo copia al portapapeles. Ábrelo en
+el otro dispositivo: Moodboard guarda la URL y la clave solas, limpia el
+enlace y abre el diálogo de cuenta. Ahí sólo tienes que escribir **el mismo
+correo y la misma contraseña**.
+
+> El enlace lleva la clave anon, que es **pública por diseño**: lo que protege
+> tus datos son las políticas RLS y tu contraseña, no el secreto de esa clave.
+
+En unos segundos verás los mismos tableros en los dos dispositivos.
 
 ---
 
@@ -109,9 +126,9 @@ segundos verás los mismos tableros en los dos.
   importar*.
 - Los proyectos gratuitos se **pausan** tras un período de inactividad; basta
   con reactivarlos desde el panel de Supabase.
-- El correo de cortesía de Supabase tiene un límite bajo de mensajes por hora.
-  Si vas a iniciar sesión seguido, configura tu propio SMTP en
-  **Authentication → Emails → SMTP Settings**.
+- La contraseña la valida Supabase (mínimo 8 caracteres, que es lo que exige
+  también la app). Si la olvidas, crea otra cuenta con otro correo o cambia la
+  contraseña desde **Authentication** → **Users** en el panel.
 - La **clave anon es pública por diseño**: va dentro de la app y cualquiera que
   inspeccione el tráfico puede verla. No es un secreto. Lo que protege tus
   datos son las **políticas RLS** del paso 2, que sólo dejan leer y escribir las
@@ -125,9 +142,12 @@ segundos verás los mismos tableros en los dos.
 
 | Síntoma | Causa probable |
 | --- | --- |
-| "Revisa la URL…" al guardar | La URL debe empezar con `https://` y no llevar `/` final. |
-| No llega el correo | Límite de envío del correo de cortesía, o el mensaje cayó en spam. |
-| Llega un enlace en vez de un código | Falta `{{ .Token }}` en la plantilla (paso 4). |
-| Las imágenes no aparecen en el otro dispositivo | El bucket `blobs` no existe o le faltan las políticas del paso 2. |
-| Los cambios no llegan en vivo | Falta el `alter publication supabase_realtime add table public.scenes` del paso 2. |
-| Estado "Error" en el icono de nube | Abre el diálogo de la nube: muestra el mensaje exacto del servidor. |
+| Paso 1 ❌ "No pudimos conectar con esa URL" | La URL no es la del proyecto (`https://<ref>.supabase.co`) o no hay red. |
+| Paso 1 ❌ "La clave anon no sirve" | Copiaste otra clave: usa **anon public**, no `service_role` ni la contraseña de la base de datos. |
+| Paso 2 ❌ | Falta desactivar **Confirm email** (paso 3 de esta guía) y pulsar **Save**. |
+| Paso 3 ❌ "Falta la tabla scenes" / "Falta el bucket blobs" | Todavía no ejecutaste el SQL: usa **Copiar SQL** → **Abrir el editor SQL** → pega → **Run**. |
+| "Esa cuenta ya existe y la contraseña no coincide" | El correo ya tiene cuenta: escribe la contraseña con la que la creaste. |
+| "Tu proyecto todavía exige confirmar el correo" | Quedó activo **Confirm email**: desactívalo y pulsa **Volver a comprobar**. |
+| Las imágenes no aparecen en el otro dispositivo | El bucket `blobs` no existe o le faltan las políticas: vuelve a ejecutar el SQL. |
+| Los cambios no llegan en vivo | Falta el `alter publication supabase_realtime add table public.scenes` del SQL. |
+| Estado "Error" en el icono de nube | Abre el diálogo de la nube: el paso 4 muestra el detalle traducido. |
