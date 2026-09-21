@@ -275,6 +275,7 @@ export const en: Record<keyof typeof es, string> = {
   ui_pin_route_photos: 'iPhone or iPad: in Pinterest save the pins to Photos (Share → Save image), then use Import images here to select them all at once.',
   ui_pin_route_zip: 'Any device: a ZIP with the board images (for example a compressed folder from the Mac or from Files) is imported whole with the button below.',
   ui_pin_auto_organize: 'Organize with AI when the import finishes',
+  ui_pin_configure_key: 'Set up API key…',
   ui_pin_choose: 'Choose images or ZIP…',
   ui_pin_ready_drop: 'Ready: drag the pins onto the canvas. Dropping three or more will organize them with AI.',
   ui_pin_guide: 'See the step-by-step guide',

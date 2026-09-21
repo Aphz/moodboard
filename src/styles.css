@@ -39,6 +39,12 @@ body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; 
 #empty-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; color: var(--fg-muted); font-size: 17px; text-align: center; padding: 24px; }
 #empty-hint[hidden] { display: none; }
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+/*
+ * El lienzo desactiva el menú de iOS (`-webkit-touch-callout` en `body`), pero
+ * eso también quita «Pegar» al mantener pulsado un campo de texto: se vuelve a
+ * activar en todo lo editable.
+ */
+input, textarea, [contenteditable='true'] { -webkit-touch-callout: default; -webkit-user-select: text; user-select: text; }
 button { background: none; border: none; padding: 0; cursor: pointer; }
 button:disabled { opacity: 0.35; cursor: default; }
 input[type='text'], input[type='url'], input[type='number'], input[type='password'], textarea, select {
@@ -47,7 +53,9 @@ input[type='text'], input[type='url'], input[type='number'], input[type='passwor
 input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 input[type='range'] { width: 100%; accent-color: var(--accent); }
 input[type='color'] { width: 44px; height: 32px; border: none; background: none; padding: 0; border-radius: 8px; }
-input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent); }
+/* Casillas y radios: área táctil cómoda para dedo y lápiz en iPad. */
+input[type='checkbox'], input[type='radio'] { width: 22px; height: 22px; min-width: 22px; accent-color: var(--accent); }
+.dialog label.row { min-height: 44px; }
 
 /* barras */
 #top-bar { position: absolute; top: calc(var(--sat) + 8px); left: calc(var(--sal) + 8px); right: calc(var(--sar) + 8px); display: flex; gap: 8px; align-items: center; pointer-events: none; z-index: 5; }

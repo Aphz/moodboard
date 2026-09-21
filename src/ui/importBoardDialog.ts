@@ -9,27 +9,44 @@
  */
 import type { App } from '../app';
 import { aiAvailable } from '../ai/claude';
+import { onSettingsChange } from '../core/settings';
 import { importBlobs } from '../features/importImages';
 import { downloadPins, fetchBoard, normalizePinterestUrl } from '../features/pinterest';
 import { t } from '../i18n';
 import { h, svg } from './dom';
 import { icons } from './icons';
 import { showDialog, toast } from './dialogs';
+import { showSettingsDialog } from './settingsDialog';
 
 /** Guía paso a paso en el repositorio. */
 const GUIDE_URL = 'https://github.com/Aphz/moodboard/blob/main/docs/PINTEREST.md';
 
 export function showPinterestImport(app: App, initialLink = ''): void {
-  const ai = aiAvailable();
-  const auto = h('input', { type: 'checkbox', checked: ai || undefined, disabled: !ai || undefined });
+  // La casilla es una preferencia del usuario: se puede marcar aunque todavía
+  // no haya clave de IA, y en ese caso se ofrece configurarla aquí mismo.
+  const auto = h('input', { type: 'checkbox', checked: aiAvailable() || undefined });
+  const keyBtn = h('button', { class: 'btn', onclick: () => showSettingsDialog(app) }, t('ui_pin_configure_key'));
+  const keyRow = h('div', { class: 'row' }, h('span', { class: 'hint' }, t('ui_ai_no_key')), keyBtn);
+  const syncKeyRow = () => {
+    const ai = aiAvailable();
+    keyRow.style.display = ai ? 'none' : '';
+    if (ai && !auto.checked) auto.checked = true;
+  };
+  syncKeyRow();
+  // si el usuario pega la clave en Ajustes sin cerrar esto, el aviso se va solo
+  const offSettings = onSettingsChange(syncKeyRow);
   const link = h('input', {
     type: 'url',
     value: initialLink,
     placeholder: 'https://pin.it/… o https://pinterest.com/usuario/tablero/',
-    autocomplete: 'off',
+    // `autocomplete: url` evita que iOS ofrezca contraseñas guardadas del sitio
+    autocomplete: 'url',
+    name: 'pinterest-url',
     autocapitalize: 'off',
+    autocorrect: 'off',
     spellcheck: 'false',
-    inputmode: 'url'
+    inputmode: 'url',
+    enterkeyhint: 'go'
   });
   const route = (icon: string, text: string) => h('li', null, h('span', { class: 'route-icon' }, svg(icons[icon] ?? icons.photo!, 18)), h('span', null, text));
 
@@ -57,7 +74,7 @@ export function showPinterestImport(app: App, initialLink = ''): void {
       h('p', null, t('ui_pin_intro')),
       h('div', { class: 'field' }, h('label', null, t('ui_pin_link_label')), link, h('div', { class: 'hint' }, t('ui_pin_link_hint'))),
       h('label', { class: 'row' }, auto, h('span', null, t('ui_pin_auto_organize'))),
-      ai ? null : h('p', { class: 'hint' }, t('ui_ai_no_key')),
+      keyRow,
       h(
         'details',
         { class: 'routes-details' },
@@ -78,13 +95,13 @@ export function showPinterestImport(app: App, initialLink = ''): void {
         h('button', { class: 'btn primary', onclick: goLink }, t('ui_pin_link_import'))
       )
     ],
-    { wide: true }
+    { wide: true, onClose: () => offSettings() }
   );
   if (!initialLink) setTimeout(() => link.focus(), 50);
 
   /** Deja programada la organización con IA para la próxima importación. */
   function arm() {
-    app.armOrganizeAfterImport(ai && auto.checked);
+    app.armOrganizeAfterImport(auto.checked && aiAvailable());
   }
 }
 
