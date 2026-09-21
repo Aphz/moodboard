@@ -1,0 +1,6 @@
+node_modules
+
+# El .gitignore de la raíz ignora cualquier carpeta llamada "dist", pero este
+# plugin se consume por "file:" y el app importa directamente dist/esm, así que
+# aquí se versiona (esta regla, al estar en un .gitignore más profundo, gana).
+!dist/

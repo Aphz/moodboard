@@ -1,23 +1,26 @@
 /**
- * Motor de sincronización entre dispositivos (iPhone ⇄ iPad ⇄ …).
+ * Motor de sincronización entre dispositivos (iPhone ⇄ iPad ⇄ …) contra el
+ * **Google Drive del propio usuario**.
  *
- * Es completamente opcional: mientras el usuario no configure un proyecto de
- * Supabase el estado es `'off'` y este módulo no carga el SDK (se importa con
- * `import()` dinámico, así que no pesa en el bundle inicial).
+ * No hay servidor ni base de datos: la app pide un `access_token` con Google
+ * Identity Services (ámbito `drive.file`) y habla directamente con la API REST
+ * de Drive. El usuario sólo pulsa "Conectar con Google"; el desarrollador
+ * registra la app una vez en Google Cloud y fija el ID de cliente en la build
+ * (`VITE_GOOGLE_CLIENT_ID`, ver `docs/SYNC.md`).
  *
  * Flujo:
- *  1. `initSync(app)` al arrancar: lee la configuración y la sesión guardada.
- *  2. `fullSync()` compara las escenas locales con las remotas y sube, baja o
- *     fusiona (`mergeScenes`) según corresponda.
- *  3. Realtime avisa de los cambios hechos en el otro dispositivo.
+ *  1. `initSync(app)` al arrancar: si no hay ID de cliente el estado es
+ *     `'off'`; si hay token guardado y vigente arranca; si no, `'signed-out'`.
+ *  2. `fullSync()` compara los tableros locales con los de Drive y sube, baja
+ *     o fusiona (`mergeScenes`) según corresponda.
+ *  3. Cada 30 s (con la app visible) se consulta `changes.list` para enterarse
+ *     de lo que hizo el otro dispositivo.
  *  4. Cualquier cambio local se sube 3 s después del último evento del store.
  *
  * Nada de lo que ocurre aquí puede romper la app: todos los callbacks están
  * envueltos en `try/catch` y los fallos sólo cambian el estado a `'error'`.
  */
 import type { App } from '../app';
-import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
-import type { RemoteSceneMeta, SceneChange, SyncConfig } from './supabase';
 import { createScene, type Scene } from '../core/model';
 import {
   deleteScene,
@@ -29,80 +32,93 @@ import {
   setKV,
   setRemoteBlobProvider
 } from '../core/persistence';
+import { appSettings, updateAppSettings } from '../core/settings';
 import { t } from '../i18n';
+import { Drive, DriveError, SCOPES, fetchEmail, type RemoteSceneMeta, type TokenSource } from './gdrive';
 import { mergeScenes, sceneDigest } from './merge';
 
-export type { SyncConfig } from './supabase';
 export { mergeScenes, sceneDigest } from './merge';
+export { ROOT_FOLDER_NAME, extForMime, mimeForName, parseModifiedTime } from './gdrive';
 
-/** Estados observables de la sincronización. */
+/** Estados observables de la sincronización (`'off'` = build sin ID de cliente). */
 export type SyncState = 'off' | 'signed-out' | 'syncing' | 'synced' | 'offline' | 'error';
 
-/** Largo mínimo de la contraseña (coincide con el mínimo por defecto de Supabase). */
-export const MIN_PASSWORD_LENGTH = 8;
-
-/** Resultado de `signIn`, pensado para que la interfaz decida qué mostrar. */
-export type SignInCode = 'ok' | 'confirm-email' | 'wrong-password' | 'error';
-
-/** Respuesta de `signIn`: nunca lanza, siempre trae un mensaje traducido. */
-export interface SignInResult {
-  ok: boolean;
-  code: SignInCode;
-  message: string;
+/** Sesión de Google guardada en IndexedDB (sobrevive a recargar la app). */
+export interface GoogleToken {
+  /** `access_token` de Google (vive una hora). */
+  token: string;
+  /** Momento (ms) en que vence. */
+  exp: number;
+  /** Correo del usuario, para mostrarlo en el diálogo. */
+  email: string;
 }
 
-/** Estado de un paso del asistente: ✅ ❌ ⏳. */
-export type SetupStepState = 'ok' | 'fail' | 'pending';
-
-/** Un paso comprobado, con su explicación de una línea ya traducida. */
-export interface SetupStep {
-  state: SetupStepState;
-  message: string;
-}
-
-/** Informe del asistente de configuración (`checkSetup`). */
-export interface SetupReport {
-  /** Subdominio del proyecto (`abcdefgh`), o cadena vacía si la URL no sirve. */
-  ref: string;
-  /** Paso A: la URL responde y la clave anon vale. */
-  project: SetupStep;
-  /** Paso B: `mailer_autoconfirm` activo (no se necesita el correo). */
-  confirmEmail: SetupStep;
-  /** Paso C: tabla `scenes` y bucket `blobs`. */
-  data: SetupStep;
-  /** `true` cuando falta ejecutar `supabase/schema.sql`. */
-  needsSql: boolean;
-}
-
-/** Milisegundos de espera tras el último cambio antes de subir la escena. */
-const PUSH_DEBOUNCE_MS = 3000;
-/** Reintento cuando el usuario está en medio de un gesto. */
-const BUSY_RETRY_MS = 1000;
-
-const KV_CONFIG = 'syncConfig';
-const KV_LAST_SYNC = 'lastSyncAt';
-const KV_BLOBS = 'syncedBlobs';
-const recKey = (sceneId: string) => `lastSync:${sceneId}`;
-
-/** Huella de la escena tal como quedó en la última sincronización. */
+/** Huella de un tablero tal como quedó en la última sincronización. */
 interface SyncRecord {
   /** `sceneDigest` del contenido sincronizado. */
   digest: string;
-  /** `updated_at` remoto (ms) correspondiente. */
-  remote: number;
+  /** `modifiedTime` remoto (ms) correspondiente. */
+  remoteMtime: number;
+  /** Identificador del archivo en Drive. */
+  fileId: string;
 }
 
-type Engine = typeof import('./supabase');
+/** Milisegundos de espera tras el último cambio antes de subir el tablero. */
+const PUSH_DEBOUNCE_MS = 3000;
+/** Reintento cuando el usuario está en medio de un gesto. */
+const BUSY_RETRY_MS = 1000;
+/** Cada cuánto se consulta `changes.list` con la app visible. */
+const POLL_MS = 30000;
+/** Margen para dar un token por vencido antes de tiempo. */
+const TOKEN_SKEW_MS = 60000;
+/** Tiempo máximo de espera de una renovación silenciosa. */
+const SILENT_TIMEOUT_MS = 8000;
+
+const KV_TOKEN = 'gdriveToken';
+const KV_LAST_SYNC = 'lastSyncAt';
+const KV_PAGE_TOKEN = 'gdrivePageToken';
+const recKey = (sceneId: string) => `lastSync:${sceneId}`;
+
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
+
+// ---------------------------------------------------------------------------
+// tipos mínimos de Google Identity Services
+
+interface GisTokenResponse {
+  access_token?: string;
+  expires_in?: number | string;
+  error?: string;
+  error_description?: string;
+}
+
+interface GisTokenClient {
+  requestAccessToken(overrides?: { prompt?: string }): void;
+}
+
+interface Gis {
+  accounts: {
+    oauth2: {
+      initTokenClient(config: {
+        client_id: string;
+        scope: string;
+        callback: (r: GisTokenResponse) => void;
+        error_callback?: (e: unknown) => void;
+      }): GisTokenClient;
+      revoke(token: string, done?: () => void): void;
+    };
+  };
+}
 
 // ---------------------------------------------------------------------------
 // estado del módulo
 
 let app: App | null = null;
-let engine: Engine | null = null;
-let sb: SupabaseClient | null = null;
-let cfg: SyncConfig | null = null;
-let user: { id: string; email: string } | null = null;
-let channel: RealtimeChannel | null = null;
+let drive: Drive | null = null;
+let token: GoogleToken | null = null;
+let tokenClient: GisTokenClient | null = null;
+let gisPromise: Promise<Gis> | null = null;
+/** Resolución pendiente de `requestAccessToken` (sólo una a la vez). */
+let pendingToken: ((r: GisTokenResponse | null) => void) | null = null;
 
 let state: SyncState = 'off';
 let errorMsg = '';
@@ -113,10 +129,14 @@ let netBound = false;
 
 let unsubscribeStore: (() => void) | null = null;
 let pushTimer = 0;
-/** Huella del último contenido sincronizado, por escena (evita subir ecos). */
+let pollTimer = 0;
+
+/** Huella del último contenido sincronizado, por tablero (evita subir ecos). */
 const syncedDigest = new Map<string, string>();
-/** Bitmaps que ya están en Storage. */
-let uploadedBlobs: Set<string> | null = null;
+/** `sceneId` → `fileId` en Drive, tal como se vio en la última lista. */
+const fileIds = new Map<string, string>();
+/** Bitmaps que ya sabemos que están en Drive. */
+const uploadedBlobs = new Set<string>();
 
 const stateListeners = new Set<(s: SyncState) => void>();
 
@@ -140,14 +160,9 @@ export function getSyncError(): string {
   return errorMsg;
 }
 
-/** Usuario con sesión iniciada, o `null`. */
+/** Usuario con sesión de Google iniciada, o `null`. */
 export function getSyncUser(): { email: string } | null {
-  return user ? { email: user.email } : null;
-}
-
-/** Configuración guardada del proyecto Supabase, o `null`. */
-export function getSyncConfig(): SyncConfig | null {
-  return cfg;
+  return token ? { email: token.email } : null;
 }
 
 /** Momento (ms) de la última sincronización correcta; 0 si nunca. */
@@ -172,7 +187,7 @@ function notify() {
 
 function setState(s: SyncState) {
   state = s;
-  if (s !== 'error' && s !== 'offline') errorMsg = '';
+  if (s !== 'error' && s !== 'offline' && s !== 'signed-out') errorMsg = '';
   notify();
 }
 
@@ -190,441 +205,354 @@ function fail(e: unknown) {
 // mensajes de error
 
 /**
- * Traduce los errores habituales de Supabase a un texto claro en el idioma de
- * la app. El usuario no debería ver nunca la jerga cruda de la API.
+ * Traduce los errores habituales de Drive y de Google Identity Services a un
+ * texto claro en el idioma de la app. El usuario nunca ve la jerga cruda.
  */
 export function describeSyncError(e: unknown): string {
-  const raw = typeof e === 'string' ? e : String((e as { message?: string; error_description?: string })?.message ?? (e as { error_description?: string })?.error_description ?? e ?? '');
+  if (e instanceof DriveError) {
+    if (e.status === 401 || e.status === 403) {
+      const r = e.reason.toLowerCase();
+      if (r.includes('ratelimit') || r.includes('quota')) return t('ui_sync_err_rate_limit');
+      if (e.status === 401) return t('ui_sync_err_reconnect');
+      return t('ui_sync_err_denied');
+    }
+    if (e.status === 429) return t('ui_sync_err_rate_limit');
+    if (e.status >= 500) return t('ui_sync_err_server');
+  }
+  const raw = typeof e === 'string' ? e : String((e as { message?: string })?.message ?? e ?? '');
   const m = raw.toLowerCase();
   if (!raw || raw === 'undefined' || raw === 'null') return t('ui_sync_err_unknown');
-  if (m.includes('rate limit') || m.includes('over_email_send_rate_limit') || m.includes('too many requests')) return t('ui_sync_err_rate_limit');
-  if (m.includes('token has expired') || m.includes('otp_expired') || m.includes('expired or is invalid')) return t('ui_sync_err_token');
-  if (m.includes('invalid login credentials') || m.includes('user already registered') || m.includes('user_already_exists')) return t('ui_sync_err_wrong_password');
-  if (m.includes('email not confirmed') || m.includes('email_not_confirmed')) return t('ui_sync_err_confirm_email');
-  if (m.includes('password should be at least') || m.includes('weak_password')) return t('ui_sync_password_short');
-  if (m.includes('failed to fetch') || m.includes('networkerror') || m.includes('load failed') || m.includes('network request failed')) return t('ui_sync_err_network');
-  if (m.includes('could not find the table') || (m.includes('relation') && m.includes('does not exist'))) return t('ui_sync_data_no_table');
-  if (m.includes('bucket not found')) return t('ui_sync_data_no_bucket');
+  if (m.includes('popup') || m.includes('access_denied') || m.includes('interaction_required')) return t('ui_sync_err_reconnect');
+  if (m.includes('failed to fetch') || m.includes('networkerror') || m.includes('load failed') || m.includes('network request failed')) {
+    return t('ui_sync_err_network');
+  }
   return `${t('ui_sync_err_unknown')} (${raw})`;
 }
 
 // ---------------------------------------------------------------------------
-// carga perezosa del SDK
+// ID de cliente de Google
 
-async function loadEngine(): Promise<Engine> {
-  if (!engine) engine = await import('./supabase');
-  return engine;
+/**
+ * ID de cliente OAuth de la build, con respaldo en los ajustes de la app para
+ * poder probarlo antes de fijarlo en el `.env`.
+ */
+export function getClientId(): string {
+  const fromEnv = (import.meta.env?.VITE_GOOGLE_CLIENT_ID ?? '').trim();
+  return fromEnv || (appSettings.googleClientId ?? '').trim();
 }
 
-/** Crea (o reutiliza) el cliente de Supabase. Lanza si no hay configuración. */
-async function ensureClient(): Promise<SupabaseClient> {
-  if (sb) return sb;
-  if (!cfg) cfg = await getKV<SyncConfig | null>(KV_CONFIG, null);
-  if (!cfg?.url || !cfg?.anonKey) throw new Error(t('ui_sync_not_configured'));
-  const eng = await loadEngine();
-  sb = eng.createSupabase(cfg);
-  sb.auth.onAuthStateChange((event, session) => {
-    try {
-      if (event === 'SIGNED_OUT' || !session?.user) {
-        if (user) void stop();
-        return;
+/** ¿Esta build puede sincronizar (hay ID de cliente)? */
+export function hasClientId(): boolean {
+  return getClientId().length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Google Identity Services
+
+/** Carga el script de GIS bajo demanda (nunca en el arranque en frío). */
+function ensureGis(): Promise<Gis> {
+  const existing = (globalThis as { google?: Gis }).google;
+  if (existing?.accounts?.oauth2) return Promise.resolve(existing);
+  if (gisPromise) return gisPromise;
+  gisPromise = new Promise<Gis>((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      reject(new Error('no DOM'));
+      return;
+    }
+    const done = () => {
+      const g = (globalThis as { google?: Gis }).google;
+      if (g?.accounts?.oauth2) resolve(g);
+      else reject(new Error(t('ui_sync_err_network')));
+    };
+    const prev = document.querySelector<HTMLScriptElement>(`script[src="${GIS_SRC}"]`);
+    if (prev) {
+      prev.addEventListener('load', done);
+      prev.addEventListener('error', () => reject(new Error(t('ui_sync_err_network'))));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = GIS_SRC;
+    script.async = true;
+    script.defer = true;
+    script.addEventListener('load', done);
+    script.addEventListener('error', () => reject(new Error(t('ui_sync_err_network'))));
+    document.head.appendChild(script);
+  }).catch((e) => {
+    gisPromise = null;
+    throw e;
+  });
+  return gisPromise;
+}
+
+/** Cliente de token de GIS, creado una sola vez por ID de cliente. */
+async function ensureTokenClient(): Promise<GisTokenClient> {
+  if (tokenClient) return tokenClient;
+  const gis = await ensureGis();
+  tokenClient = gis.accounts.oauth2.initTokenClient({
+    client_id: getClientId(),
+    scope: SCOPES,
+    callback: (r) => {
+      const resolve = pendingToken;
+      pendingToken = null;
+      try {
+        resolve?.(r);
+      } catch {
+        /* nunca lanzar desde un callback de Google */
       }
-      user = { id: session.user.id, email: session.user.email ?? '' };
-    } catch {
-      /* nunca lanzar desde un callback */
+    },
+    error_callback: () => {
+      const resolve = pendingToken;
+      pendingToken = null;
+      try {
+        resolve?.(null);
+      } catch {
+        /* ignorar */
+      }
     }
   });
-  return sb;
+  return tokenClient;
+}
+
+/**
+ * Pide un `access_token`. `silent` usa `prompt: ''` (sin interacción); Safari
+ * puede bloquearlo, y entonces se devuelve `null` y el estado pasa a
+ * `'signed-out'` con el aviso de volver a conectar.
+ */
+async function requestToken(silent: boolean): Promise<GoogleToken | null> {
+  if (!hasClientId()) return null;
+  const client = await ensureTokenClient();
+  const response = await new Promise<GisTokenResponse | null>((resolve) => {
+    let settled = false;
+    const finish = (r: GisTokenResponse | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    pendingToken = finish;
+    if (silent) window.setTimeout(() => finish(null), SILENT_TIMEOUT_MS);
+    try {
+      client.requestAccessToken(silent ? { prompt: '' } : undefined);
+    } catch {
+      finish(null);
+    }
+  });
+  if (!response?.access_token) return null;
+  const seconds = Number(response.expires_in ?? 3600);
+  const next: GoogleToken = {
+    token: response.access_token,
+    exp: Date.now() + (Number.isFinite(seconds) ? seconds : 3600) * 1000,
+    email: token?.email ?? ''
+  };
+  if (!next.email) next.email = await fetchEmail(next.token);
+  token = next;
+  await setKV(KV_TOKEN, next);
+  return next;
+}
+
+/** ¿El token guardado sirve para usarlo ahora mismo? */
+function tokenIsValid(v: GoogleToken | null | undefined): boolean {
+  return !!v?.token && v.exp - TOKEN_SKEW_MS > Date.now();
+}
+
+/** Fuente de token para el cliente de Drive. */
+const tokens: TokenSource = {
+  async get() {
+    if (token && tokenIsValid(token)) return token.token;
+    const next = await renew();
+    return next?.token ?? null;
+  },
+  async refresh() {
+    const next = await renew();
+    return next?.token ?? null;
+  }
+};
+
+/** Renovación silenciosa; si falla, se corta la sesión con un aviso claro. */
+async function renew(): Promise<GoogleToken | null> {
+  try {
+    const next = await requestToken(true);
+    if (next) return next;
+  } catch {
+    /* tratado abajo como sesión caída */
+  }
+  await forgetSession(t('ui_sync_err_reconnect'));
+  return null;
+}
+
+/** Olvida la sesión local y deja el estado en `'signed-out'`. */
+async function forgetSession(message = ''): Promise<void> {
+  token = null;
+  await stop();
+  errorMsg = message;
+  setState(hasClientId() ? 'signed-out' : 'off');
 }
 
 // ---------------------------------------------------------------------------
 // arranque / parada
 
 /**
- * Arranca la sincronización si hay configuración y sesión. Es idempotente y
- * seguro llamarla varias veces (tras configurar o iniciar sesión).
+ * Arranca la sincronización. Es idempotente: se puede llamar varias veces
+ * (al iniciar la app, tras conectar con Google o tras pegar un ID de cliente).
  */
 export async function initSync(appRef: App): Promise<void> {
   app = appRef;
   bindNetwork();
   try {
-    cfg = await getKV<SyncConfig | null>(KV_CONFIG, null);
     lastSyncAt = await getKV<number>(KV_LAST_SYNC, 0);
-    if (!cfg?.url || !cfg?.anonKey) {
+    if (!hasClientId()) {
+      token = null;
       setState('off');
       return;
     }
-    const client = await ensureClient();
-    const { data } = await client.auth.getSession();
-    if (!data.session?.user) {
-      user = null;
+    const saved = await getKV<GoogleToken | null>(KV_TOKEN, null);
+    if (!saved?.token) {
+      token = null;
       setState('signed-out');
       return;
     }
-    user = { id: data.session.user.id, email: data.session.user.email ?? '' };
-    await start();
+    if (tokenIsValid(saved)) {
+      token = saved;
+      // el script de GIS sólo hace falta para renovar: se carga en segundo plano
+      void ensureGis().catch(() => undefined);
+      await start();
+      return;
+    }
+    // había sesión pero el token venció: GIS puede renovarla sin molestar
+    token = saved;
+    setState('signed-out');
+    void ensureGis().catch(() => undefined);
+    if (await renew()) await start();
   } catch (e) {
     fail(e);
   }
 }
 
 async function start(): Promise<void> {
-  if (!sb || !user) return;
-  const eng = await loadEngine();
-  const client = sb;
-  const uid = user.id;
+  if (!token) return;
+  drive ??= new Drive(tokens);
+  const d = drive;
 
-  // los bitmaps que falten se bajan de Storage al vuelo
+  // los bitmaps que falten se bajan de Drive al vuelo
   setRemoteBlobProvider(async (id) => {
-    if (!sb || !user) return null;
-    const blob = await eng.downloadBlob(sb, user.id, id);
+    if (!token) return null;
+    const blob = await d.downloadBlob(id);
     if (!blob) return null;
     const { w, h } = await decodeSize(blob);
     return { blob, w, h };
   });
 
   watchStore();
-
-  if (channel) {
-    try {
-      await client.removeChannel(channel);
-    } catch {
-      /* ignorar */
-    }
-    channel = null;
-  }
-  channel = eng.subscribeScenes(client, uid, (c) => void onRemoteChange(c));
-
+  startPolling();
   await fullSync();
 }
 
 async function stop(): Promise<void> {
-  user = null;
   syncedDigest.clear();
-  uploadedBlobs = null;
+  fileIds.clear();
+  uploadedBlobs.clear();
+  drive?.reset();
   setRemoteBlobProvider(null);
   unsubscribeStore?.();
   unsubscribeStore = null;
-  clearTimeout(pushTimer);
-  if (sb && channel) {
-    try {
-      await sb.removeChannel(channel);
-    } catch {
-      /* ignorar */
-    }
+  if (typeof window !== 'undefined') {
+    clearTimeout(pushTimer);
+    clearInterval(pollTimer);
   }
-  channel = null;
-  setState(cfg ? 'signed-out' : 'off');
+  pushTimer = 0;
+  pollTimer = 0;
 }
 
 function bindNetwork() {
   if (netBound || typeof window === 'undefined') return;
   netBound = true;
   window.addEventListener('online', () => {
-    if (user) void fullSync();
+    if (token) void fullSync();
   });
   window.addEventListener('offline', () => {
-    if (user) setState('offline');
+    if (token) setState('offline');
   });
   document.addEventListener('visibilitychange', () => {
-    if (!user) return;
+    if (!token) return;
     if (document.visibilityState === 'visible') void fullSync();
     else void pushCurrentScene();
   });
 }
 
-/** Sube la escena abierta 3 s después del último cambio real. */
+/** Sube el tablero abierto 3 s después del último cambio real. */
 function watchStore() {
   if (unsubscribeStore || !app) return;
   unsubscribeStore = app.store.subscribe((e) => {
     if (e.type === 'viewport' || e.type === 'selection') return;
+    if (typeof window === 'undefined') return;
     clearTimeout(pushTimer);
     pushTimer = window.setTimeout(() => void pushCurrentScene(), PUSH_DEBOUNCE_MS);
   });
 }
 
+/** Sondea `changes.list` cada 30 s mientras la app está visible. */
+function startPolling() {
+  if (pollTimer || typeof window === 'undefined') return;
+  pollTimer = window.setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    void pollChanges();
+  }, POLL_MS);
+}
+
 // ---------------------------------------------------------------------------
-// configuración y sesión
-
-/** Guarda la URL y la clave anon del proyecto y reinicia el motor. */
-export async function configureSync(next: SyncConfig): Promise<void> {
-  const url = next.url.trim().replace(/\/+$/, '');
-  const anonKey = next.anonKey.trim();
-  if (!/^https?:\/\//i.test(url) || !anonKey) throw new Error(t('ui_sync_invalid_config'));
-  await stop();
-  sb = null;
-  cfg = { url, anonKey };
-  await setKV(KV_CONFIG, cfg);
-  if (app) await initSync(app);
-}
-
-/** Olvida el proyecto configurado (cierra sesión y deja el estado en `'off'`). */
-export async function clearSyncConfig(): Promise<void> {
-  try {
-    if (sb) await sb.auth.signOut();
-  } catch {
-    /* ignorar */
-  }
-  await stop();
-  sb = null;
-  cfg = null;
-  await setKV(KV_CONFIG, null);
-  setState('off');
-}
+// conectar / desconectar
 
 /**
- * Inicia sesión con correo y contraseña, creando la cuenta si hace falta.
- *
- * No depende del correo electrónico: primero prueba `signInWithPassword` y,
- * si esas credenciales no existen, registra la cuenta con `signUp`. Nunca
- * lanza; devuelve un resultado con un código para que la interfaz sepa qué
- * mostrar (por ejemplo, el enlace para desactivar "Confirm email").
+ * Pide permiso a Google y arranca la sincronización.
+ * Nunca lanza: devuelve `false` y deja el motivo en `getSyncError()`.
  */
-export async function signIn(email: string, password: string): Promise<SignInResult> {
-  const mail = email.trim();
-  if (!mail) return { ok: false, code: 'error', message: t('ui_sync_email_required') };
-  if (password.length < MIN_PASSWORD_LENGTH) return { ok: false, code: 'error', message: t('ui_sync_password_short') };
-  try {
-    const client = await ensureClient();
-
-    // 1. ¿ya existe la cuenta?
-    const signed = await client.auth.signInWithPassword({ email: mail, password });
-    if (signed.data?.session?.user) return await adoptSession(signed.data.session.user, mail);
-    if (signed.error && !isBadCredentials(signed.error)) {
-      const message = describeSyncError(signed.error);
-      const code: SignInCode = message === t('ui_sync_err_confirm_email') ? 'confirm-email' : 'error';
-      return { ok: false, code, message };
-    }
-
-    // 2. no existe (o la contraseña no coincide) ⇒ intentar crearla
-    const created = await client.auth.signUp({ email: mail, password });
-    if (created.error) {
-      const message = describeSyncError(created.error);
-      const code: SignInCode = message === t('ui_sync_err_wrong_password') ? 'wrong-password' : 'error';
-      return { ok: false, code, message };
-    }
-    if (created.data.session?.user) return await adoptSession(created.data.session.user, mail);
-
-    const newUser = created.data.user as { identities?: unknown[] } | null;
-    if (newUser) {
-      // con "Confirm email" activado, Supabase devuelve un usuario sin
-      // identidades cuando el correo ya estaba registrado (no delata cuentas)
-      if (Array.isArray(newUser.identities) && newUser.identities.length === 0) {
-        return { ok: false, code: 'wrong-password', message: t('ui_sync_err_wrong_password') };
-      }
-      // usuario creado pero sin sesión ⇒ falta desactivar la confirmación
-      return { ok: false, code: 'confirm-email', message: t('ui_sync_err_confirm_email') };
-    }
-    return { ok: false, code: 'error', message: t('ui_sync_err_unknown') };
-  } catch (e) {
-    return { ok: false, code: 'error', message: describeSyncError(e) };
+export async function connectGoogle(): Promise<boolean> {
+  if (!hasClientId()) {
+    errorMsg = t('ui_sync_no_client_id');
+    setState('off');
+    return false;
   }
-}
-
-/** ¿El error dice sólo que las credenciales no sirven (cuenta inexistente)? */
-function isBadCredentials(e: unknown): boolean {
-  const m = String((e as { message?: string })?.message ?? '').toLowerCase();
-  const code = String((e as { code?: string })?.code ?? '').toLowerCase();
-  return m.includes('invalid login credentials') || code === 'invalid_credentials';
-}
-
-/** Guarda el usuario recién autenticado y arranca la sincronización. */
-async function adoptSession(u: { id: string; email?: string | null }, fallbackEmail: string): Promise<SignInResult> {
-  user = { id: u.id, email: u.email ?? fallbackEmail };
   try {
+    setState('syncing');
+    const next = await requestToken(false);
+    if (!next) {
+      await forgetSession(t('ui_sync_err_reconnect'));
+      return false;
+    }
     await start();
+    return true;
   } catch (e) {
     fail(e);
+    return false;
   }
-  return { ok: true, code: 'ok', message: t('ui_sync_account_ok', { email: user.email }) };
 }
 
-/** Cierra la sesión en este dispositivo (los datos locales se conservan). */
-export async function signOut(): Promise<void> {
+/** Revoca el token en Google, olvida la sesión y deja de sincronizar. */
+export async function disconnectGoogle(): Promise<void> {
+  const current = token?.token;
   try {
-    if (sb) await sb.auth.signOut();
-  } catch (e) {
-    fail(e);
-  }
-  await stop();
-}
-
-// ---------------------------------------------------------------------------
-// asistente de configuración
-
-/** Subdominio del proyecto (`abcdefgh` en `https://abcdefgh.supabase.co`). */
-export function getProjectRef(url: string): string {
-  const m = /^https?:\/\/([a-z0-9-]+)\.supabase\.(co|in|net)\/?/i.exec(url.trim());
-  return m ? m[1] : '';
-}
-
-/** Panel de Supabase: Authentication → Sign In / Providers. */
-export function providersUrl(url: string): string {
-  const ref = getProjectRef(url);
-  return ref ? `https://supabase.com/dashboard/project/${ref}/auth/providers` : 'https://supabase.com/dashboard';
-}
-
-/** Panel de Supabase: SQL Editor con una consulta nueva. */
-export function sqlEditorUrl(url: string): string {
-  const ref = getProjectRef(url);
-  return ref ? `https://supabase.com/dashboard/project/${ref}/sql/new` : 'https://supabase.com/dashboard';
-}
-
-/**
- * Comprueba la configuración del proyecto y devuelve un informe por pasos.
- *
- * El paso "proyecto" y el paso "confirmación de correo" se resuelven con una
- * sola llamada a `GET {url}/auth/v1/settings` (sólo `fetch`, sin el SDK), así
- * que se pueden probar con `fetch` simulado. El paso de datos (tabla `scenes`
- * y bucket `blobs`) necesita el cliente de Supabase ya configurado, por eso
- * sólo se ejecuta si se pide con `opts.data`.
- */
-export async function checkSetup(
-  config: SyncConfig | null = getSyncConfig(),
-  opts: { data?: boolean } = {}
-): Promise<SetupReport> {
-  const report: SetupReport = {
-    ref: '',
-    project: { state: 'pending', message: t('ui_sync_project_pending') },
-    confirmEmail: { state: 'pending', message: t('ui_sync_confirm_pending') },
-    data: { state: 'pending', message: t('ui_sync_data_pending') },
-    needsSql: false
-  };
-  const url = (config?.url ?? '').trim().replace(/\/+$/, '');
-  const anonKey = (config?.anonKey ?? '').trim();
-  if (!url || !anonKey) return report;
-
-  report.ref = getProjectRef(url);
-  if (!/^https?:\/\//i.test(url) || !report.ref) {
-    report.project = { state: 'fail', message: t('ui_sync_project_bad_url') };
-    return report;
-  }
-
-  let res: Response;
-  try {
-    res = await fetch(`${url}/auth/v1/settings`, {
-      headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` }
-    });
-  } catch {
-    report.project = { state: 'fail', message: t('ui_sync_project_bad_url') };
-    return report;
-  }
-  if (res.status === 401 || res.status === 403) {
-    report.project = { state: 'fail', message: t('ui_sync_project_bad_key') };
-    return report;
-  }
-  if (!res.ok) {
-    report.project = { state: 'fail', message: t('ui_sync_project_bad_url') };
-    return report;
-  }
-  report.project = { state: 'ok', message: t('ui_sync_project_ok') };
-
-  let settings: { mailer_autoconfirm?: boolean } = {};
-  try {
-    settings = ((await res.json()) as { mailer_autoconfirm?: boolean }) ?? {};
-  } catch {
-    settings = {};
-  }
-  report.confirmEmail =
-    settings.mailer_autoconfirm === true
-      ? { state: 'ok', message: t('ui_sync_confirm_ok') }
-      : { state: 'fail', message: t('ui_sync_confirm_fail') };
-
-  if (opts.data) await checkData(report);
-  return report;
-}
-
-/** Comprueba la tabla `scenes` y el bucket `blobs` con el cliente guardado. */
-async function checkData(report: SetupReport): Promise<void> {
-  try {
-    const client = await ensureClient();
-    const eng = await loadEngine();
-
-    const table = await client.from(eng.SCENES_TABLE).select('id', { head: true, count: 'exact' });
-    if (table.error) {
-      const msg = eng.errorMessage(table.error).toLowerCase();
-      const code = String((table.error as { code?: string }).code ?? '');
-      if (code === 'PGRST205' || code === '42P01' || msg.includes('does not exist') || msg.includes('could not find the table')) {
-        report.data = { state: 'fail', message: t('ui_sync_data_no_table') };
-        report.needsSql = true;
-        return;
-      }
-      report.data = { state: 'fail', message: describeSyncError(table.error) };
-      return;
+    if (current) {
+      const gis = (globalThis as { google?: Gis }).google;
+      gis?.accounts?.oauth2?.revoke?.(current);
     }
-
-    const bucket = await client.storage.from(eng.BLOBS_BUCKET).list('', { limit: 1 });
-    if (bucket.error) {
-      const msg = eng.errorMessage(bucket.error).toLowerCase();
-      if (msg.includes('bucket not found') || msg.includes('not found')) {
-        report.data = { state: 'fail', message: t('ui_sync_data_no_bucket') };
-        report.needsSql = true;
-        return;
-      }
-      report.data = { state: 'fail', message: describeSyncError(bucket.error) };
-      return;
-    }
-
-    report.data = { state: 'ok', message: t('ui_sync_data_ok') };
   } catch {
-    report.data = { state: 'pending', message: t('ui_sync_data_pending') };
+    /* si Google no responde, igual olvidamos la sesión aquí */
   }
-}
-
-// ---------------------------------------------------------------------------
-// enlace para configurar el otro dispositivo
-
-/** Prefijo del hash que transporta la configuración entre dispositivos. */
-export const SETUP_HASH_PREFIX = '#setup=';
-
-function toBase64Url(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function fromBase64Url(text: string): string {
-  const b64 = text.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(text.length / 4) * 4, '=');
-  const bin = atob(b64);
-  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
-}
-
-/** Base del enlace: la app tal como está abierta, sin fijar ningún dominio. */
-function currentBase(): string {
-  return typeof location === 'undefined' ? '' : location.origin + location.pathname;
+  tokenClient = null;
+  await setKV(KV_TOKEN, null);
+  await setKV(KV_PAGE_TOKEN, null);
+  await forgetSession();
 }
 
 /**
- * Arma el enlace que lleva la configuración al otro dispositivo.
- * La clave anon es pública por diseño, así que puede viajar en el enlace.
+ * Guarda el ID de cliente escrito a mano (modo desarrollador) y reinicia el
+ * motor. `appRef` sólo hace falta si todavía no se llamó a `initSync`.
  */
-export function encodeSetupLink(config: SyncConfig, base: string = currentBase()): string {
-  const payload = JSON.stringify({
-    url: config.url.trim().replace(/\/+$/, ''),
-    anonKey: config.anonKey.trim()
-  });
-  return `${base}${SETUP_HASH_PREFIX}${toBase64Url(payload)}`;
-}
-
-/**
- * Lee la configuración de un enlace o de un hash (`#setup=…`).
- * Devuelve `null` si no viene, está corrupto o no parece una URL de proyecto.
- */
-export function decodeSetupLink(link: string): SyncConfig | null {
-  try {
-    const i = link.indexOf(SETUP_HASH_PREFIX);
-    if (i < 0) return null;
-    const raw = link.slice(i + SETUP_HASH_PREFIX.length).split('&')[0].trim();
-    if (!raw) return null;
-    const data = JSON.parse(fromBase64Url(raw)) as Partial<SyncConfig>;
-    const url = String(data.url ?? '').trim().replace(/\/+$/, '');
-    const anonKey = String(data.anonKey ?? '').trim();
-    if (!/^https?:\/\//i.test(url) || !anonKey) return null;
-    return { url, anonKey };
-  } catch {
-    return null;
-  }
+export async function setClientId(id: string, appRef: App | null = null): Promise<void> {
+  await updateAppSettings({ googleClientId: id.trim() });
+  tokenClient = null;
+  gisPromise = null;
+  const target = appRef ?? app;
+  if (target) await initSync(target);
 }
 
 /** Fuerza una sincronización completa ahora mismo. */
@@ -636,7 +564,7 @@ export async function syncNow(): Promise<void> {
 // sincronización
 
 async function fullSync(): Promise<void> {
-  if (!sb || !user) return;
+  if (!drive || !token) return;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     setState('offline');
     return;
@@ -648,13 +576,18 @@ async function fullSync(): Promise<void> {
   syncing = true;
   setState('syncing');
   try {
-    const eng = await loadEngine();
-    const remote = await eng.listRemoteScenes(sb);
+    const remote = await drive.listScenes();
+    const remoteById = new Map<string, RemoteSceneMeta>();
+    for (const m of remote) {
+      remoteById.set(m.sceneId, m);
+      fileIds.set(m.sceneId, m.fileId);
+    }
     const local = await listScenes();
-    const remoteById = new Map(remote.map((r) => [r.id, r]));
-    const ids = new Set<string>([...remote.map((r) => r.id), ...local.map((l) => l.id)]);
+    const ids = new Set<string>([...remoteById.keys(), ...local.map((l) => l.id)]);
     for (const id of ids) await syncScene(id, remoteById.get(id) ?? null);
     await pushCurrentScene();
+    await drive.pruneDeleted(remote);
+    await ensurePageToken();
     lastSyncAt = Date.now();
     await setKV(KV_LAST_SYNC, lastSyncAt);
     setState('synced');
@@ -670,26 +603,35 @@ async function fullSync(): Promise<void> {
 }
 
 /**
- * Reconcilia una escena concreta. `remoteMeta` puede venir de la lista de
- * `fullSync`; si es `undefined` se consulta al servidor.
+ * Anota el punto de partida de `changes.list` la primera vez. Si Drive no
+ * responde no pasa nada: se reintenta en la próxima sincronización.
  */
-async function syncScene(id: string, remoteMeta: RemoteSceneMeta | null | undefined): Promise<void> {
-  const client = sb;
-  const u = user;
-  if (!client || !u) return;
-  const eng = await loadEngine();
-
-  let meta = remoteMeta;
-  if (meta === undefined) {
-    const list = await eng.listRemoteScenes(client);
-    meta = list.find((m) => m.id === id) ?? null;
+async function ensurePageToken(): Promise<void> {
+  try {
+    if (!drive) return;
+    if (await getKV<string | null>(KV_PAGE_TOKEN, null)) return;
+    const startToken = await drive.startPageToken();
+    if (startToken) await setKV(KV_PAGE_TOKEN, startToken);
+  } catch {
+    /* el sondeo de cambios es un extra: no puede romper la sincronización */
   }
+}
 
-  // la escena abierta puede tener cambios que aún no llegan a IndexedDB
+/**
+ * Reconcilia un tablero concreto contra su archivo en Drive.
+ *
+ * @param id   identificador del tablero.
+ * @param meta resumen remoto, o `null` si en Drive no existe.
+ */
+async function syncScene(id: string, meta: RemoteSceneMeta | null): Promise<void> {
+  const d = drive;
+  if (!d || !token) return;
+
+  // el tablero abierto puede tener cambios que aún no llegan a IndexedDB
   const localScene = app && app.store.scene.id === id ? app.store.scene : await loadScene(id);
   const rec = await getKV<SyncRecord | null>(recKey(id), null);
 
-  // borrada en el servidor ⇒ borrarla aquí
+  // borrado en Drive ⇒ borrarlo aquí también
   if (meta?.deleted) {
     if (localScene) await removeLocalScene(id);
     await setKV(recKey(id), null);
@@ -697,25 +639,25 @@ async function syncScene(id: string, remoteMeta: RemoteSceneMeta | null | undefi
     return;
   }
 
-  // sólo local ⇒ subirla
+  // sólo local ⇒ subirlo
   if (!meta) {
     if (localScene) await pushScene(localScene);
     return;
   }
 
-  // sólo remota
+  // sólo remoto
   if (!localScene) {
     if (rec) {
-      // la teníamos sincronizada y ya no está ⇒ se borró en este dispositivo
-      await eng.softDeleteRemoteScene(client, u.id, id);
+      // lo teníamos sincronizado y ya no está ⇒ se borró en este dispositivo
+      await d.softDeleteScene(meta.fileId);
       await setKV(recKey(id), null);
       syncedDigest.delete(id);
       return;
     }
-    const remote = await eng.fetchRemoteScene(client, id);
-    if (remote?.scene) {
-      await saveAndApply(remote.scene);
-      await markSynced(remote.scene, remote.updatedAt);
+    const remote = await d.downloadScene(meta.fileId);
+    if (remote) {
+      await saveAndApply(remote);
+      await markSynced(remote, meta.fileId, meta.modifiedTime);
     }
     return;
   }
@@ -723,51 +665,70 @@ async function syncScene(id: string, remoteMeta: RemoteSceneMeta | null | undefi
   // en ambos lados: ¿qué cambió desde la última sincronización?
   const localDigest = sceneDigest(localScene);
   const localChanged = !rec || rec.digest !== localDigest;
-  const remoteChanged = !rec || rec.remote !== meta.updatedAt;
+  const remoteChanged = !rec || rec.remoteMtime !== meta.modifiedTime;
   if (!localChanged && !remoteChanged) return;
   if (localChanged && !remoteChanged) {
     await pushScene(localScene);
     return;
   }
 
-  const remote = await eng.fetchRemoteScene(client, id);
-  if (!remote?.scene) {
+  const remote = await d.downloadScene(meta.fileId);
+  if (!remote) {
     await pushScene(localScene);
     return;
   }
   if (!localChanged) {
-    await saveAndApply(remote.scene);
-    await markSynced(remote.scene, remote.updatedAt);
+    await saveAndApply(remote);
+    await markSynced(remote, meta.fileId, meta.modifiedTime);
     return;
   }
 
   // los dos cambiaron ⇒ fusionar
-  const merged = mergeScenes(localScene, remote.scene);
+  const merged = mergeScenes(localScene, remote);
   const out = merged.scene;
   if (merged.remoteChanged) {
-    // el servidor debe ver una marca de tiempo nueva para que los demás
-    // dispositivos se enteren de la fusión
+    // Drive debe ver una marca nueva para que los demás dispositivos se enteren
     out.updatedAt = Math.max(out.updatedAt + 1, Date.now());
     await saveAndApply(out);
     await pushScene(out, true);
   } else {
     await saveAndApply(out);
-    await markSynced(out, remote.updatedAt);
+    await markSynced(out, meta.fileId, meta.modifiedTime);
   }
 }
 
-/** Reacciona a un cambio anunciado por Realtime. */
-async function onRemoteChange(change: SceneChange): Promise<void> {
+/** Consulta los cambios que hizo el otro dispositivo desde la última vez. */
+async function pollChanges(): Promise<void> {
   try {
-    if (!sb || !user) return;
-    if (!change) {
-      await fullSync();
+    if (!drive || !token || syncing) return;
+    const pageToken = await getKV<string | null>(KV_PAGE_TOKEN, null);
+    if (!pageToken) {
+      await setKV(KV_PAGE_TOKEN, await drive.startPageToken());
       return;
     }
-    const rec = await getKV<SyncRecord | null>(recKey(change.id), null);
-    if (rec && rec.remote === change.updatedAt) return; // eco de nuestra propia subida
+    const { changes, nextToken } = await drive.listChanges(pageToken);
+    if (nextToken && nextToken !== pageToken) await setKV(KV_PAGE_TOKEN, nextToken);
+    const touched: RemoteSceneMeta[] = [];
+    for (const c of changes) {
+      const props = c.file?.appProperties;
+      if (c.removed || !c.file || props?.kind !== 'scene') continue;
+      const sceneId = props.sceneId ?? c.file.name.replace(/\.json$/i, '');
+      if (!sceneId) continue;
+      touched.push({
+        fileId: c.file.id ?? c.fileId,
+        sceneId,
+        modifiedTime: Date.parse(c.file.modifiedTime ?? '') || 0,
+        deleted: props.deleted === '1'
+      });
+    }
+    if (!touched.length) return;
     setState('syncing');
-    await syncScene(change.id, { id: change.id, name: '', updatedAt: change.updatedAt, deleted: change.deleted });
+    for (const meta of touched) {
+      fileIds.set(meta.sceneId, meta.fileId);
+      const rec = await getKV<SyncRecord | null>(recKey(meta.sceneId), null);
+      if (rec && rec.remoteMtime === meta.modifiedTime) continue; // eco de lo nuestro
+      await syncScene(meta.sceneId, meta);
+    }
     lastSyncAt = Date.now();
     await setKV(KV_LAST_SYNC, lastSyncAt);
     setState('synced');
@@ -776,10 +737,10 @@ async function onRemoteChange(change: SceneChange): Promise<void> {
   }
 }
 
-/** Sube la escena abierta si su contenido difiere de lo ya sincronizado. */
+/** Sube el tablero abierto si su contenido difiere de lo ya sincronizado. */
 async function pushCurrentScene(): Promise<void> {
   try {
-    if (!app || !sb || !user) return;
+    if (!app || !drive || !token) return;
     const scene = app.store.scene;
     if (syncedDigest.get(scene.id) === sceneDigest(scene)) return;
     await pushScene(scene);
@@ -791,26 +752,36 @@ async function pushCurrentScene(): Promise<void> {
   }
 }
 
-/** Sube una escena y sus bitmaps, y anota la huella sincronizada. */
+/** Sube un tablero y sus bitmaps, y anota la huella sincronizada. */
 async function pushScene(scene: Scene, force = false): Promise<void> {
-  const client = sb;
-  const u = user;
-  if (!client || !u) return;
+  const d = drive;
+  if (!d || !token) return;
   const digest = sceneDigest(scene);
   if (!force && syncedDigest.get(scene.id) === digest) return;
-  const eng = await loadEngine();
-  await eng.pushRemoteScene(client, u.id, scene);
+  let fileId = fileIds.get(scene.id) ?? null;
+  if (!fileId) {
+    const rec = await getKV<SyncRecord | null>(recKey(scene.id), null);
+    fileId = rec?.fileId ?? null;
+  }
+  const saved = await d.uploadScene(scene, fileId);
+  fileIds.set(scene.id, saved.fileId);
   await uploadSceneBlobs(scene);
-  await markSynced(scene, scene.updatedAt, digest);
+  await markSynced(scene, saved.fileId, saved.modifiedTime, digest);
 }
 
-async function markSynced(scene: Scene, remoteUpdatedAt: number, digest = sceneDigest(scene)): Promise<void> {
+async function markSynced(
+  scene: Scene,
+  fileId: string,
+  remoteMtime: number,
+  digest = sceneDigest(scene)
+): Promise<void> {
   syncedDigest.set(scene.id, digest);
-  const rec: SyncRecord = { digest, remote: remoteUpdatedAt };
+  fileIds.set(scene.id, fileId);
+  const rec: SyncRecord = { digest, remoteMtime, fileId };
   await setKV(recKey(scene.id), rec);
 }
 
-/** Guarda la escena localmente y, si es la abierta, la aplica al store. */
+/** Guarda el tablero localmente y, si es el abierto, lo aplica al store. */
 async function saveAndApply(scene: Scene): Promise<void> {
   const isOpen = !!app && app.store.scene.id === scene.id;
   if (isOpen && app!.gestures.busy) {
@@ -823,15 +794,15 @@ async function saveAndApply(scene: Scene): Promise<void> {
   if (isOpen) {
     app!.store.applyRemote(scene);
   } else if (app) {
-    // `saveScene` marca la escena guardada como "última abierta": restaurarlo
+    // `saveScene` marca el tablero guardado como "último abierto": restaurarlo
     await setKV('lastSceneId', app.store.scene.id);
   }
 }
 
-/** Borra una escena local; si estaba abierta, cambia a otra sin resucitarla. */
+/** Borra un tablero local; si estaba abierto, cambia a otro sin resucitarlo. */
 async function removeLocalScene(id: string): Promise<void> {
   if (app && app.store.scene.id === id) {
-    app.store.dirty = false; // que el autosave no la vuelva a escribir
+    app.store.dirty = false; // que el autosave no lo vuelva a escribir
     const others = (await listScenes()).filter((s) => s.id !== id);
     await deleteScene(id);
     if (others.length) {
@@ -847,17 +818,28 @@ async function removeLocalScene(id: string): Promise<void> {
 }
 
 /**
- * Marca una escena como borrada en el servidor. La app no necesita llamarla
- * (el borrado local se detecta solo en la siguiente sincronización), pero es
- * útil para propagarlo al instante.
+ * Marca un tablero como borrado en Drive. La app no necesita llamarla (el
+ * borrado local se detecta solo en la siguiente sincronización), pero es útil
+ * para propagarlo al instante.
  */
 export async function markSceneDeleted(id: string): Promise<void> {
   try {
-    if (!sb || !user) return;
-    const eng = await loadEngine();
-    await eng.softDeleteRemoteScene(sb, user.id, id);
+    if (!drive || !token) return;
+    let fileId = fileIds.get(id) ?? null;
+    if (!fileId) {
+      const rec = await getKV<SyncRecord | null>(recKey(id), null);
+      fileId = rec?.fileId ?? null;
+    }
+    if (!fileId) {
+      const remote = await drive.listScenes();
+      for (const m of remote) fileIds.set(m.sceneId, m.fileId);
+      fileId = fileIds.get(id) ?? null;
+    }
+    if (!fileId) return;
+    await drive.softDeleteScene(fileId);
     await setKV(recKey(id), null);
     syncedDigest.delete(id);
+    fileIds.delete(id);
   } catch (e) {
     fail(e);
   }
@@ -867,22 +849,20 @@ export async function markSceneDeleted(id: string): Promise<void> {
 // bitmaps
 
 async function uploadSceneBlobs(scene: Scene): Promise<void> {
-  const client = sb;
-  const u = user;
-  if (!client || !u) return;
-  const eng = await loadEngine();
-  if (!uploadedBlobs) uploadedBlobs = new Set(await getKV<string[]>(KV_BLOBS, []));
-  let changed = false;
+  const d = drive;
+  if (!d || !token) return;
   for (const it of scene.items) {
     if (it.kind !== 'image') continue;
     if (uploadedBlobs.has(it.blobId)) continue;
+    if (await d.hasBlob(it.blobId)) {
+      uploadedBlobs.add(it.blobId);
+      continue;
+    }
     const blob = await getLocalBlob(it.blobId);
     if (!blob) continue; // aún no está aquí; ya se subirá desde el otro dispositivo
-    await eng.uploadBlob(client, u.id, it.blobId, blob);
+    await d.uploadBlob(it.blobId, blob);
     uploadedBlobs.add(it.blobId);
-    changed = true;
   }
-  if (changed) await setKV(KV_BLOBS, [...uploadedBlobs]);
 }
 
 /** Dimensiones reales de un bitmap descargado (Safari admite createImageBitmap). */

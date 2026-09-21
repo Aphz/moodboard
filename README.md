@@ -37,10 +37,11 @@ con tu propia clave.
 
 ## Sincronización entre dispositivos
 
-La app funciona sin cuenta. Si quieres seguir el mismo tablero en el iPhone y el iPad,
-configura tu propio proyecto gratuito de Supabase (5 minutos, guía en [docs/SYNC.md](docs/SYNC.md)),
-inicia sesión con tu correo (código de un solo uso) y las escenas e imágenes se
-sincronizan con actualización en vivo. Nada sale del dispositivo hasta que tú lo actives.
+La app funciona sin cuenta y sin servidor. En la versión nativa para iPhone e iPad,
+los tableros se guardan en tu propio iCloud Drive (Archivos → iCloud Drive → Moodboard)
+y se sincronizan solos entre tus dispositivos, sin crear cuentas nuevas ni configurar nada.
+En la versión web (PWA) no hay sincronización automática: puedes exportar un tablero
+como `.moodboard` y enviarlo por AirDrop. Detalles en [docs/SYNC.md](docs/SYNC.md).
 
 ## Instalación en iPad / iPhone
 
