@@ -25,6 +25,7 @@ import {
   connectGoogle,
   disconnectGoogle,
   getLastSync,
+  renewSession,
   getSyncApp,
   getSyncError,
   getSyncState,
@@ -60,6 +61,8 @@ export function syncStateLabel(s: SyncState): string {
   switch (s) {
     case 'off':
       return t('ui_sync_state_off');
+    case 'expired':
+      return t('ui_sync_state_expired');
     case 'signed-out':
       return t('ui_sync_state_signed_out');
     case 'syncing':
@@ -76,7 +79,7 @@ export function syncStateLabel(s: SyncState): string {
 function iconFor(s: SyncState): string {
   if (s === 'syncing') return cloudIcons.cloudSync;
   if (s === 'synced') return cloudIcons.cloud;
-  if (s === 'error' || s === 'offline') return cloudIcons.cloudAlert;
+  if (s === 'error' || s === 'offline' || s === 'expired') return cloudIcons.cloudAlert;
   return cloudIcons.cloudOff;
 }
 
@@ -261,6 +264,16 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
       now.removeAttribute('disabled');
       build();
     });
+    const renew = h('button', { class: 'btn primary' }, t('ui_sync_renew'));
+    renew.addEventListener('click', async () => {
+      renew.setAttribute('disabled', '');
+      let ok = false;
+      await guard(async () => {
+        ok = await renewSession();
+      });
+      build();
+      toast(ok ? t('ui_sync_connected') : getSyncError() || t('ui_sync_err_unknown'), { error: !ok, ms: ok ? 2600 : 5000 });
+    });
     const out = h('button', { class: 'btn danger' }, t('ui_sync_disconnect'));
     out.addEventListener('click', async () => {
       if (!(await confirmDialog(t('ui_sync_disconnect_confirm'), { danger: true }))) return;
@@ -275,8 +288,8 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
         row(t('ui_sync_account'), email),
         row(t('ui_sync_status'), syncStateLabel(state)),
         row(t('ui_sync_last'), fmtDate(getLastSync())),
-        (state === 'error' || state === 'offline') && getSyncError() ? h('p', { class: 'hint' }, getSyncError()) : null,
-        h('div', { class: 'actions' }, out, now),
+        (state === 'error' || state === 'offline' || state === 'expired') && getSyncError() ? h('p', { class: 'hint' }, getSyncError()) : null,
+        h('div', { class: 'actions' }, out, state === 'expired' ? renew : now),
         h('p', { class: 'hint' }, t('ui_sync_where'))
       )
     ];

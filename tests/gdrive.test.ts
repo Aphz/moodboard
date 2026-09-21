@@ -785,6 +785,55 @@ describe('motor de sincronización', () => {
     await sync.disconnectGoogle();
   });
 
+  it('con token vencido queda "expired", conserva el correo y no toca la red', async () => {
+    connectedState();
+    mem.kv.set('gdriveToken', { token: 'viejo', exp: Date.now() - 1000, email: 'tester@gmail.com' });
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(scene('s_x', 1)) as never);
+    expect(sync.getSyncState()).toBe('expired');
+    expect(sync.getSyncUser()).toEqual({ email: 'tester@gmail.com' });
+    expect(sync.isConnected()).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+    await sync.disconnectGoogle();
+  });
+
+  it('el primer toque renueva sin consentimiento (prompt vacío) y arranca la sincronización', async () => {
+    connectedState();
+    mem.kv.set('gdriveToken', { token: 'viejo', exp: Date.now() - 1000, email: 'tester@gmail.com' });
+    let callback: ((r: { access_token?: string; expires_in?: number }) => void) | null = null;
+    const requests: unknown[] = [];
+    vi.stubGlobal('google', {
+      accounts: {
+        oauth2: {
+          initTokenClient: (cfg: { callback: typeof callback }) => {
+            callback = cfg.callback;
+            return {
+              requestAccessToken: (opts: unknown) => {
+                requests.push(opts);
+                callback?.({ access_token: 'nuevo', expires_in: 3600 });
+              }
+            };
+          },
+          revoke: () => undefined
+        }
+      }
+    });
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+    expect(sync.getSyncState()).toBe('expired');
+
+    document.dispatchEvent(new Event('pointerup'));
+    for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0));
+
+    expect(requests).toEqual([{ prompt: '' }]);
+    expect(sync.getSyncState()).toBe('synced');
+    expect(sync.getSyncUser()).toEqual({ email: 'tester@gmail.com' });
+    expect((mem.kv.get('gdriveToken') as { token: string }).token).toBe('nuevo');
+    await sync.disconnectGoogle();
+  });
+
   it('con ID de cliente pero sin sesión guardada queda "signed-out"', async () => {
     const sync = await loadSync();
     expect(sync.hasClientId()).toBe(true);
