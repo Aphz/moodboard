@@ -10,9 +10,14 @@
  * endpoint. Esto expone la clave en el cliente: es aceptable aquí porque la
  * clave es del propio usuario y nunca sale de su dispositivo salvo hacia la API.
  *
- * Modelo por defecto: `appSettings.aiModel` (ver `DEFAULT_MODEL`).
+ * Costo: cada llamada se cobra en la cuenta de Anthropic del usuario. Por eso
+ * el modelo por defecto es el más barato de la tabla (`DEFAULT_AI_MODEL`,
+ * Haiku 4.5), todas las funciones devuelven el consumo real (`usage`) y existe
+ * un contador acumulado local (`recordUsage` / `getAiUsage` / `resetAiUsage`).
  */
 import { appSettings } from '../core/settings';
+import { getKV, setKV } from '../core/persistence';
+import { DEFAULT_AI_MODEL, isKnownModel, usageToUsd, type UsageEstimate } from './pricing';
 
 /** Endpoint de la Messages API. */
 const API_URL = 'https://api.anthropic.com/v1/messages';
@@ -23,17 +28,35 @@ const API_VERSION = '2023-06-01';
 /** Cabecera que habilita el acceso directo desde el navegador (CORS). */
 const BROWSER_HEADER = 'anthropic-dangerous-direct-browser-access';
 
-/** Modelo por defecto si `appSettings.aiModel` está vacío. */
-const DEFAULT_MODEL = 'claude-sonnet-5';
-
 /** Tiempo máximo por petición (ms). */
 const TIMEOUT_MS = 60_000;
 
-/** Máximo de imágenes por llamada. */
+/** Máximo de imágenes por llamada (y tamaño de lote al etiquetar). */
 const MAX_IMAGES = 20;
+
+/** Tope de salida al describir el tablero (texto breve). */
+export const MAX_TOKENS_DESCRIBE = 600;
+
+/** Tope de salida por lote al etiquetar (sólo devuelve un JSON corto). */
+export const MAX_TOKENS_TAG = 400;
+
+/** Tope de salida al sugerir agrupaciones (JSON corto). */
+export const MAX_TOKENS_ARRANGE = 600;
 
 /** Idiomas soportados por los prompts. */
 export type AiLang = 'es' | 'en';
+
+/** Consumo de una o varias llamadas, con su costo en dólares. */
+export type AiUsage = UsageEstimate;
+
+/** Contador acumulado guardado en este dispositivo. */
+export interface AiUsageTotals extends AiUsage {
+  /** Número de llamadas a la API contabilizadas. */
+  calls: number;
+}
+
+/** Clave del contador acumulado en el almacén kv de IndexedDB. */
+const USAGE_KEY = 'aiUsage';
 
 /** Bloque de contenido admitido por esta integración (texto o imagen JPEG). */
 export type ContentBlock =
@@ -66,6 +89,63 @@ export function redactKey(key: string): string {
   return '•'.repeat(Math.min(8, k.length - 4)) + k.slice(-4);
 }
 
+/**
+ * Modelo que se usará en la próxima llamada: el elegido en ajustes si está en
+ * la tabla de precios, si no el por defecto (el más económico).
+ */
+export function resolveModel(): string {
+  const m = appSettings.aiModel.trim();
+  return isKnownModel(m) ? m : DEFAULT_AI_MODEL;
+}
+
+// ---------------------------------------------------------------------------
+// Contador de consumo (local, en IndexedDB kv)
+
+/** Consumo en cero, útil como acumulador inicial. */
+export function emptyUsage(): AiUsage {
+  return { inputTokens: 0, outputTokens: 0, usd: 0 };
+}
+
+/** Suma dos consumos (para acumular lotes dentro de una misma operación). */
+export function addUsage(a: AiUsage, b: AiUsage): AiUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    usd: a.usd + b.usd
+  };
+}
+
+/** Totales acumulados en este dispositivo desde el último reinicio. */
+export async function getAiUsage(): Promise<AiUsageTotals> {
+  const saved = await getKV<Partial<AiUsageTotals>>(USAGE_KEY, {});
+  return {
+    inputTokens: Number(saved.inputTokens) || 0,
+    outputTokens: Number(saved.outputTokens) || 0,
+    usd: Number(saved.usd) || 0,
+    calls: Number(saved.calls) || 0
+  };
+}
+
+/** Suma un consumo al contador acumulado y devuelve los nuevos totales. */
+export async function recordUsage(usage: AiUsage, calls = 1): Promise<AiUsageTotals> {
+  const prev = await getAiUsage();
+  const next: AiUsageTotals = {
+    inputTokens: prev.inputTokens + (usage.inputTokens || 0),
+    outputTokens: prev.outputTokens + (usage.outputTokens || 0),
+    usd: prev.usd + (usage.usd || 0),
+    calls: prev.calls + calls
+  };
+  await setKV(USAGE_KEY, next);
+  return next;
+}
+
+/** Deja el contador acumulado en cero. */
+export async function resetAiUsage(): Promise<AiUsageTotals> {
+  const zero: AiUsageTotals = { inputTokens: 0, outputTokens: 0, usd: 0, calls: 0 };
+  await setKV(USAGE_KEY, zero);
+  return zero;
+}
+
 // ---------------------------------------------------------------------------
 // Llamada HTTP
 
@@ -74,14 +154,22 @@ interface ApiTextBlock {
   text?: string;
 }
 
+interface ApiUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
 interface ApiResponse {
   content?: ApiTextBlock[];
+  usage?: ApiUsage;
 }
 
 /** Construye el AiError adecuado a partir de una respuesta HTTP fallida. */
 async function errorFromResponse(res: Response): Promise<AiError> {
   if (res.status === 401) return new AiError('clave inválida', 401);
-  if (res.status === 429) return new AiError('límite de uso', 429);
+  if (res.status === 429) {
+    return new AiError('límite de uso o sin crédito en la cuenta de Anthropic', 429);
+  }
   let detail = `error ${res.status}`;
   try {
     const body: unknown = await res.json();
@@ -100,19 +188,21 @@ async function errorFromResponse(res: Response): Promise<AiError> {
 
 /**
  * POST a la Messages API con un único turno de usuario.
- * Devuelve el texto concatenado de los bloques `text` de la respuesta.
+ * Devuelve el texto concatenado de los bloques `text` y el consumo real
+ * (`usage`) que informa el cuerpo de la respuesta, ya convertido a dólares.
  */
 async function callClaude(opts: {
   system: string;
   content: ContentBlock[];
   maxTokens?: number;
   json?: boolean;
-}): Promise<string> {
+}): Promise<{ text: string; usage: AiUsage }> {
   const key = appSettings.aiApiKey.trim();
   if (!key) throw new AiError('no hay clave API configurada');
 
+  const model = resolveModel();
   const system = opts.json
-    ? `${opts.system}\n\nResponde ÚNICAMENTE con JSON válido, sin explicaciones, sin comentarios y sin vallas de código.`
+    ? `${opts.system}\n\nResponde SÓLO con JSON válido, sin comentarios ni vallas de código.`
     : opts.system;
 
   const controller = new AbortController();
@@ -130,8 +220,8 @@ async function callClaude(opts: {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        model: appSettings.aiModel || DEFAULT_MODEL,
-        max_tokens: opts.maxTokens ?? 1024,
+        model,
+        max_tokens: opts.maxTokens ?? MAX_TOKENS_DESCRIBE,
         system,
         messages: [{ role: 'user', content: opts.content }]
       })
@@ -158,7 +248,13 @@ async function callClaude(opts: {
     .join('')
     .trim();
   if (!text) throw new AiError('respuesta vacía de la API');
-  return text;
+
+  const inputTokens = Number(data.usage?.input_tokens) || 0;
+  const outputTokens = Number(data.usage?.output_tokens) || 0;
+  return {
+    text,
+    usage: { inputTokens, outputTokens, usd: usageToUsd(model, { inputTokens, outputTokens }) }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -171,11 +267,7 @@ function langName(lang: AiLang): string {
 
 /** Instrucción común: idioma y prohibición de inventar. */
 function baseRules(lang: AiLang): string {
-  return (
-    `Responde siempre en ${langName(lang)}. ` +
-    'No inventes contenido: describe únicamente lo que se ve en las imágenes y lo que dicen las notas. ' +
-    'Si algo no se puede saber a partir del material, dilo en lugar de suponerlo.'
-  );
+  return `Responde en ${langName(lang)}. Describe sólo lo que se ve; no inventes.`;
 }
 
 /**
@@ -239,17 +331,20 @@ function normalizeTag(t: unknown): string | null {
 
 // ---------------------------------------------------------------------------
 // Funciones de alto nivel
+//
+// Todas devuelven `{ result, usage }`: `usage` es el consumo real de la API
+// (acumulado entre lotes) para poder mostrarlo y sumarlo al contador local.
 
 /**
  * Analiza el moodboard (hasta 20 imágenes + textos de las notas) y devuelve un
- * markdown breve (≤ 250 palabras) con dirección visual, paleta, temas,
+ * markdown breve (≤ 200 palabras) con dirección visual, paleta, temas,
  * referencias y sugerencias de qué falta.
  */
 export async function describeBoard(input: {
   images: { name: string; jpegBase64: string }[];
   notes: string[];
   lang: AiLang;
-}): Promise<string> {
+}): Promise<{ result: string; usage: AiUsage }> {
   const images = input.images.slice(0, MAX_IMAGES);
   const content: ContentBlock[] = [];
   for (const img of images) {
@@ -265,28 +360,29 @@ export async function describeBoard(input: {
   });
 
   const system =
-    `Eres un director de arte que analiza moodboards. ${baseRules(input.lang)} ` +
-    'Escribe markdown breve, máximo 250 palabras, con estas secciones: dirección visual, paleta, ' +
-    'temas, referencias (estilos/épocas/medios reconocibles) y qué falta o qué añadirías. ' +
-    'Sé concreto y evita adjetivos vacíos.';
+    `Eres director de arte y analizas moodboards. ${baseRules(input.lang)} ` +
+    'Markdown breve, máximo 200 palabras, con estas secciones: dirección visual, paleta, temas, ' +
+    'referencias y qué falta. Concreto, sin adjetivos vacíos.';
 
-  return callClaude({ system, content, maxTokens: 1024 });
+  const { text, usage } = await callClaude({ system, content, maxTokens: MAX_TOKENS_DESCRIBE });
+  return { result: text, usage };
 }
 
 /**
  * Etiqueta imágenes (3-6 etiquetas por imagen, en minúsculas y sin `#`).
- * Procesa en lotes secuenciales de 20 imágenes y devuelve `{ id: tags[] }`.
+ * Procesa en lotes secuenciales de 20 imágenes y devuelve `{ id: tags[] }`
+ * junto al consumo sumado de todos los lotes.
  */
 export async function tagImages(input: {
   images: { id: string; name: string; jpegBase64: string }[];
   lang: AiLang;
-}): Promise<Record<string, string[]>> {
+}): Promise<{ result: Record<string, string[]>; usage: AiUsage }> {
   const out: Record<string, string[]> = {};
+  let usage = emptyUsage();
   const system =
-    `Eres un catalogador de referencias visuales. ${baseRules(input.lang)} ` +
-    'Para cada imagen devuelve entre 3 y 6 etiquetas en minúsculas, sin almohadilla y sin espacios ' +
-    'al principio o al final (tema, estilo, color dominante, medio, ambiente). ' +
-    'Responde SOLO con un objeto JSON cuyas claves sean exactamente los identificadores dados: ' +
+    `Catalogas referencias visuales. ${baseRules(input.lang)} ` +
+    'Para cada imagen da 3 a 6 etiquetas en minúsculas, sin almohadilla (tema, estilo, color, medio, ' +
+    'ambiente). Devuelve sólo un objeto JSON con los identificadores dados como claves: ' +
     '{ "<id>": ["etiqueta", ...] }.';
 
   for (const batch of chunk(input.images, MAX_IMAGES)) {
@@ -300,27 +396,28 @@ export async function tagImages(input: {
       text: `Etiqueta cada imagen. Identificadores: ${batch.map((i) => i.id).join(', ')}.`
     });
 
-    const text = await callClaude({ system, content, maxTokens: 1024, json: true });
-    const parsed = parseJsonLoose(text) as Record<string, unknown>;
+    const res = await callClaude({ system, content, maxTokens: MAX_TOKENS_TAG, json: true });
+    usage = addUsage(usage, res.usage);
+    const parsed = parseJsonLoose(res.text) as Record<string, unknown>;
     for (const [id, value] of Object.entries(parsed)) {
       if (!Array.isArray(value)) continue;
       const tags = value.map(normalizeTag).filter((t): t is string => t !== null);
       if (tags.length) out[id] = tags.slice(0, 6);
     }
   }
-  return out;
+  return { result: out, usage };
 }
 
-/** Agrupa ítems por tema. */
+/** Agrupa ítems por tema (sólo texto: no envía imágenes, así que es muy barato). */
 export async function suggestArrangement(input: {
   items: { id: string; name: string; tags: string[]; palette: string[] }[];
   lang: AiLang;
-}): Promise<{ groups: { title: string; ids: string[] }[] }> {
+}): Promise<{ result: { groups: { title: string; ids: string[] }[] }; usage: AiUsage }> {
   const system =
-    `Eres un director de arte que organiza un moodboard. ${baseRules(input.lang)} ` +
-    'Agrupa los ítems por tema o afinidad visual usando sólo los datos dados (nombre, etiquetas, paleta). ' +
-    'Cada ítem debe aparecer en un único grupo y cada grupo necesita un título corto. ' +
-    'Responde SOLO con JSON: { "groups": [ { "title": "...", "ids": ["..."] } ] }.';
+    `Organizas un moodboard. ${baseRules(input.lang)} ` +
+    'Agrupa los ítems por tema o afinidad visual usando sólo los datos dados. Cada ítem va en un ' +
+    'único grupo y cada grupo lleva un título corto. Devuelve sólo JSON: ' +
+    '{ "groups": [ { "title": "...", "ids": ["..."] } ] }.';
 
   const content: ContentBlock[] = [
     {
@@ -335,8 +432,8 @@ export async function suggestArrangement(input: {
     }
   ];
 
-  const text = await callClaude({ system, content, maxTokens: 1024, json: true });
-  const parsed = parseJsonLoose(text) as { groups?: unknown };
+  const res = await callClaude({ system, content, maxTokens: MAX_TOKENS_ARRANGE, json: true });
+  const parsed = parseJsonLoose(res.text) as { groups?: unknown };
   const raw = Array.isArray(parsed.groups) ? parsed.groups : [];
   const groups: { title: string; ids: string[] }[] = [];
   for (const g of raw) {
@@ -345,5 +442,5 @@ export async function suggestArrangement(input: {
     const ids = Array.isArray(obj.ids) ? obj.ids.filter((x): x is string => typeof x === 'string') : [];
     if (title && ids.length) groups.push({ title, ids });
   }
-  return { groups };
+  return { result: { groups }, usage: res.usage };
 }

@@ -173,3 +173,9 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 @media (max-width: 560px) {
   #toolbar .tb[data-phone-hide], #toolbar .sep[data-phone-hide] { display: none; }
 }
+
+/* ajustes de IA */
+.ai-settings .hint { margin: 4px 0 10px; }
+.ai-settings select { width: 100%; }
+.ai-cost { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+.ai-cost strong { font-size: 18px; }

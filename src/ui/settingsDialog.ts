@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import { h } from './dom';
 import { showDialog, toast } from './dialogs';
 import { bytesToHuman } from '../features/imageTools';
-import { redactKey } from '../ai/claude';
+import { renderAiSettings } from './aiDialogs';
 
 declare const __APP_VERSION__: string;
 
@@ -42,11 +42,6 @@ export function showSettingsDialog(app: App) {
   const persistBtn = h('button', { class: 'btn small' }, t('ui_storage'));
   persistBtn.addEventListener('click', async () => toast((await requestPersistence()) ? t('ui_persist_granted') : t('ui_persist_denied')));
 
-  const keyInput = h('input', { type: 'password', placeholder: a.aiApiKey ? redactKey(a.aiApiKey) : 'sk-ant-…', autocomplete: 'off' });
-  keyInput.addEventListener('change', () => void updateAppSettings({ aiApiKey: keyInput.value.trim() }));
-  const modelInput = h('input', { type: 'text', value: a.aiModel });
-  modelInput.addEventListener('change', () => void updateAppSettings({ aiModel: modelInput.value.trim() || 'claude-sonnet-5' }));
-
   const canvasColor = h('input', { type: 'color', value: S.scene.settings.canvasColor === 'transparent' ? '#1e1e1e' : S.scene.settings.canvasColor });
   canvasColor.addEventListener('input', () => S.updateSettings((s) => (s.canvasColor = canvasColor.value)));
   const gridColor = h('input', { type: 'color', value: S.scene.settings.grid.color });
@@ -73,9 +68,7 @@ export function showSettingsDialog(app: App) {
     h('h3', null, 'Apple Pencil'),
     row(t('ui_pencil_pressure'), check(a.pencilPressure, (v) => void updateAppSettings({ pencilPressure: v }))),
     row(t('ui_pencil_only_draw'), check(a.pencilOnlyDraw, (v) => void updateAppSettings({ pencilOnlyDraw: v }))),
-    h('h3', null, t('ui_ai_section')),
-    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, h('div', { class: 'hint' }, t('ui_ai_key_hint'))),
-    h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), modelInput),
+    renderAiSettings(),
     h('h3', null, t('ui_storage')),
     storage,
     h('div', { class: 'row' }, gcBtn, persistBtn),
