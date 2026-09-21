@@ -39,7 +39,7 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 |---|---|---|
 | Importar archivos | ✅ | `import_images` `Mod+I` (también desde el botón ＋) |
 | Importar desde URL | ✅ | `import_url`; valida que la respuesta sea `image/*` |
-| Importar un tablero de Pinterest | ✅ | `import_pinterest`: por enlace (tablero, pin o `pin.it`) leyendo la página vía Jina Reader y bajando los originales por wsrv.nl, porque Pinterest no envía CORS; entran los primeros 25-50 pines. Alternativas: arrastre en Split View, Fotos o ZIP. Encadena `ai_organize`. Ver `docs/PINTEREST.md` |
+| Importar un tablero de Pinterest | ✅ | `import_pinterest`: por enlace (tablero, pin o `pin.it`) leyendo la página vía Jina Reader y bajando los originales por wsrv.nl, porque Pinterest no envía CORS. Rejilla de selección antes de descargar (`src/ui/pinPicker.ts`). Sin sesión Pinterest sólo entrega sus primeros 25 pines. Alternativas: arrastre en Split View, Fotos o ZIP. Encadena `ai_organize`. Ver `docs/PINTEREST.md` |
 | Importar un ZIP de imágenes sueltas | ✅ | `inspectZip()`: si el ZIP no trae `scene.json` se importan sus imágenes (ignora `__MACOSX` y ocultos) |
 | Pegar desde el portapapeles | ✅ | `paste` `Mod+V`; imagen, URL o texto (crea nota) |
 | Arrastrar y soltar desde el navegador | ✅ | `dragenter/drop` en `src/app.ts`; archivos, URLs y texto |
@@ -121,6 +121,10 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 |---|---|---|
 | Organizar óptimo | ✅ | `arrange_optimal` `Mod+Shift+O`: empaquetado por estanterías, prueba 9 anchos y minimiza área desperdiciada |
 | Organizar en cuadrícula | ✅ | `arrange_grid` `Mod+Shift+G` |
+| Collage en columnas verticales | ➕ | `arrange_masonry` `Mod+Shift+C`: cada imagen al ancho de una columna —dos, si es apaisada— apilada donde el collage llega menos abajo («masonry»), rellenando los claros. No existe en PureRef; es la disposición por defecto de `ai_organize` |
+| Aire del collage | ➕ | Denso, equilibrado o amplio (`appSettings.collageAir`, fracción del ancho de columna): un tablero no se llena de imágenes pegadas y cuánto respira cambia según el uso |
+| Símbolos y ornamentos | ➕ | `ornaments`: signos sueltos según el mood del tablero, colocados en los claros sin tapar nada (`src/features/ornaments.ts`) |
+| Conectores entre referencias | ➕ | `connect_items`: flechas de borde a borde entre los ítems seleccionados, todas en un solo dibujo |
 | Organizar en fila / columna | ✅ | `arrange_horizontal` `Mod+Shift+H`, `arrange_vertical` `Mod+Shift+V` |
 | Organizar aleatorio (2.1.0, `Ctrl+Alt+R`) | ✅ | `arrange_random` `Mod+Alt+R`; PRNG determinista (`mulberry32`) |
 | Usar la proporción de la ventana en todos los métodos (tweak beta5) | ✅ | `viewAspect()` entra como `opts.aspect` en todos los algoritmos |
@@ -131,6 +135,14 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 | Apilar sin huecos | ✅ | `stack_h`, `stack_v` |
 | Separación de alineación (padding) configurable | ✅ | `scene.settings.alignPadding`, en Ajustes |
 | Alinear con padding 0 sin dejar huecos (fix 2.1.3) | ✅ | `alignItems()` con `padding` 0 no reordena ni separa |
+
+## Encuadre y rotación
+
+| PureRef | Estado | Detalle |
+|---|---|---|
+| Ajustar a la vista / a la selección | ✅ | `zoom_fit` `Mod+1`, `zoom_selection` `Mod+2` (`src/features/viewport.ts`) |
+| Encuadre que respeta las barras flotantes | ➕ | El ajuste usa el área libre entre la barra superior, la de herramientas, la subbarra y el panel de jerarquía, medidas del DOM, así que nada queda debajo de ellas ni bajo el área segura de iOS |
+| Rotar el dispositivo sin perder el tablero | ➕ | Al cambiar el tamaño del lienzo (rotación, Split View, la barra de Safari) se mantiene centrado lo que estaba al centro; si se veía el tablero completo y encuadrado, se vuelve a encuadrar, y si había zoom puesto en un detalle, se respeta |
 
 ## Archivo, exportación y portapapeles
 
@@ -177,7 +189,9 @@ Cosas que esta app hace y PureRef no:
 - **Paleta de color automática.** Cada imagen guarda su paleta dominante al importarse (mean-cut + fusión perceptual ΔE76 en CIE-Lab, `src/features/palette.ts`). Se puede ver con `extract_palette`, copiar los hex e insertar una nota de paleta con `add_palette_note`.
 - **Hash perceptual para duplicados y similares.** dHash de 64 bits por imagen (`src/features/phash.ts`): `find_duplicates` selecciona los grupos con similitud ≥ 0,92 y `ai_find_similar` encuentra parecidos ≥ 0,8 al ítem seleccionado. Es local, instantáneo y no usa red ni IA.
 - **Organizar por color.** `arrange_by_color` ordena por tono a partir del color dominante y deja al final lo que no tiene tono (grises, notas, dibujos).
-- **IA opcional con tu propia clave.** `ai_describe` resume el tablero en markdown (y lo inserta como nota si quieres); `ai_tag` etiqueta las imágenes seleccionadas en un solo paso de deshacer; `ai_organize` clasifica las imágenes por categorías (las tuyas o las que proponga la IA) y las recoloca en bloques con grupo y título (`src/features/organize.ts`), también en un solo paso de deshacer. Modelo por defecto `claude-haiku-4-5`, clave guardada solo en el dispositivo.
+- **Clave API a prueba de descuidos.** Se guarda en IndexedDB con respaldo en `localStorage` y se restaura sola si Safari vacía la base; sólo se acepta una cadena con forma de clave, así que un campo vacío o una contraseña autocompletada no la borran, y quitarla es un botón con confirmación.
+- **IA opcional con tu propia clave.** `ai_describe` resume el tablero en markdown (y lo inserta como nota si quieres); `ai_tag` etiqueta las imágenes seleccionadas en un solo paso de deshacer; `ai_organize` clasifica las imágenes por categorías (las tuyas o las que proponga la IA) y las recoloca como collage de columnas —las apaisadas a doble ancho y los claros rellenos—, una franja por categoría y con los bloques de alto parejo (`src/features/organize.ts`), también en un solo paso de deshacer. El nombre de la categoría no deja rótulo fijo: aparece flotando sobre el grupo al seleccionarlo. Modelo por defecto `claude-haiku-4-5`, clave guardada solo en el dispositivo.
+- **Símbolos, ornamentos y conectores.** Lo que distingue un moodboard de una grilla de imágenes. `ornaments` deduce el mood del tablero de sus etiquetas y nombre (catálogo local de siete repertorios: editorial, técnico, romántico, brutalista, retro, natural y nocturno), coloca los signos en los claros y en el margen sin tapar ninguna imagen, y deja elegir cuántos y de qué tamaño. Con clave API, `suggestOrnaments` lee el mood y propone su propio repertorio en una llamada de texto (la más barata de todas; sólo manda seis miniaturas de 192 px si el tablero no tiene ni etiquetas ni grupos). `connect_items` une los ítems seleccionados con flechas de borde a borde. Todo en un solo paso de deshacer.
 - **Apple Pencil con presión.** El grosor del trazo sigue `pointer.pressure`; el dedo mantiene el paneo mientras el lápiz dibuja. Configurable en Ajustes.
 - **Compartir con la hoja nativa de iOS.** Exportar PNG/JPEG o `.moodboard` abre el *share sheet* (`navigator.share` con archivos) para mandarlo a Fotos, Archivos, Mensajes o cualquier app; en escritorio cae a descarga.
 - **PWA offline.** Service worker con Workbox y `autoUpdate`: la app arranca sin conexión, avisa cuando hay versión nueva y pide almacenamiento persistente para que iOS no purgue los datos.

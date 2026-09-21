@@ -9,7 +9,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appSettings } from '../src/core/settings';
 import {
+  NO_CREDIT,
   aiAvailable,
+  isApiKeyLike,
   classifyImages,
   describeBoard,
   normalizeCategory,
@@ -129,12 +131,25 @@ describe('tagImages', () => {
     await expect(tagImages({ images: [IMG], lang: 'es' })).rejects.toBeInstanceOf(AiError);
   });
 
-  it('lanza AiError con status 429 explicando límite o falta de crédito', async () => {
+  it('lanza AiError con status 429 explicando el límite de peticiones', async () => {
     mockFetch(() => errResponse(429));
     await expect(tagImages({ images: [IMG], lang: 'es' })).rejects.toMatchObject({
       status: 429,
-      message: 'límite de uso o sin crédito en la cuenta de Anthropic'
+      message: expect.stringContaining('límite de peticiones')
     });
+  });
+
+  it('el saldo agotado de la API se explica como cuenta aparte de Claude.ai', async () => {
+    mockFetch(() =>
+      errResponse(400, {
+        error: {
+          message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'
+        }
+      })
+    );
+    await expect(tagImages({ images: [IMG], lang: 'es' })).rejects.toMatchObject({ status: 400, message: NO_CREDIT });
+    expect(NO_CREDIT).toContain('console.anthropic.com');
+    expect(NO_CREDIT).toContain('Claude.ai');
   });
 });
 
@@ -157,6 +172,16 @@ describe('sin clave API', () => {
 describe('utilidades', () => {
   it('aiAvailable() es true con clave', () => {
     expect(aiAvailable()).toBe(true);
+  });
+
+  it('isApiKeyLike acepta claves reales y rechaza vacíos, ofuscados y contraseñas', () => {
+    expect(isApiKeyLike('sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789')).toBe(true);
+    expect(isApiKeyLike('  sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123  ')).toBe(true);
+    expect(isApiKeyLike('')).toBe(false);
+    expect(isApiKeyLike('   ')).toBe(false);
+    expect(isApiKeyLike('••••••••6789')).toBe(false);
+    expect(isApiKeyLike('MiContraseña123')).toBe(false);
+    expect(isApiKeyLike('sk-ant-corta')).toBe(false);
   });
 
   it('redactKey sólo muestra los últimos 4 caracteres', () => {

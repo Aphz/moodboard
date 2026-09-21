@@ -31,8 +31,22 @@ export const IMAGE_PROXY = 'https://wsrv.nl/';
 /** Lado máximo con el que se piden las imágenes al proxy. */
 export const PIN_MAX_SIDE = 1600;
 
-/** Tope de pines que se descargan de una vez. */
-export const MAX_PINS = 120;
+/** Tope de pines que se traen de una vez. */
+export const MAX_PINS = 250;
+
+/** Lado de las miniaturas del selector (las 236x del CDN bastan). */
+export const PIN_THUMB_SIDE = 320;
+
+/** Error del lector o del proxy, con el motivo ya clasificado. */
+export class PinterestError extends Error {
+  /** `reader-busy` (429/401 del lector), `not-found`, `no-pins`, `network`. */
+  kind: 'reader-busy' | 'not-found' | 'no-pins' | 'network';
+  constructor(kind: PinterestError['kind'], message: string) {
+    super(message);
+    this.name = 'PinterestError';
+    this.kind = kind;
+  }
+}
 
 /** Descargas simultáneas. */
 const CONCURRENCY = 4;
@@ -123,6 +137,11 @@ export function rssUrlFor(boardUrl: string): string | null {
 export function variantUrl(pin: PinImage, variant: 'originals' | '736x' | '236x'): string {
   const ext = variant === 'originals' ? pin.ext : 'jpg';
   return `https://i.pinimg.com/${variant}/${pin.hash}.${ext}`;
+}
+
+/** Miniatura del pin para el selector, a través del proxy. */
+export function thumbUrl(pin: PinImage): string {
+  return proxiedImageUrl(variantUrl(pin, '236x'), PIN_THUMB_SIDE);
 }
 
 /** URL de la imagen a través del proxy, reducida a `maxSide` y en JPEG. */
@@ -261,11 +280,21 @@ export function boardMetaFromHtml(html: string, fallbackUrl: string): { title: s
  */
 export async function fetchBoard(link: string, fetchFn: FetchFn = fetch, onProgress?: (msg: string) => void): Promise<BoardInfo> {
   const target = normalizePinterestUrl(link);
-  if (!target) throw new Error('No es un enlace de Pinterest');
+  if (!target) throw new PinterestError('not-found', 'no es un enlace de Pinterest');
 
   onProgress?.('board');
-  const res = await fetchFn(readerUrl(target), { headers: { 'X-Return-Format': 'html' } });
-  if (!res.ok) throw new Error(`El lector respondió ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetchFn(readerUrl(target), { headers: { 'X-Return-Format': 'html' } });
+  } catch {
+    throw new PinterestError('network', 'sin conexión con el lector');
+  }
+  if (!res.ok) {
+    // el lector público limita las consultas anónimas por IP
+    if (res.status === 401 || res.status === 429) throw new PinterestError('reader-busy', `lector saturado (${res.status})`);
+    if (res.status === 404) throw new PinterestError('not-found', 'el enlace no existe o es privado');
+    throw new PinterestError('network', `el lector respondió ${res.status}`);
+  }
   const html = await res.text();
   const meta = boardMetaFromHtml(html, target);
   let pins = pinsFromBoardHtml(html);
@@ -280,7 +309,7 @@ export async function fetchBoard(link: string, fetchFn: FetchFn = fetch, onProgr
       /* el RSS es un extra */
     }
   }
-  if (!pins.length) throw new Error('No se encontraron pines en ese enlace');
+  if (!pins.length) throw new PinterestError('no-pins', 'no se encontraron pines en ese enlace');
   return { title: meta.title, canonicalUrl: meta.canonicalUrl, pinCount: meta.pinCount, pins: pins.slice(0, MAX_PINS) };
 }
 

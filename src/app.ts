@@ -37,6 +37,7 @@ import {
   arrangeByColor,
   arrangeColumn,
   arrangeGrid,
+  arrangeMasonry,
   arrangeOptimal,
   arrangeRandom,
   arrangeRow,
@@ -52,6 +53,8 @@ import { exportSet, renderItemsToBlob, safeFileName, shareOrDownload } from './f
 import { copyBlobToSystemClipboard, copyItems, duplicateItems, hasInternalClip, pasteItems } from './features/clipboard';
 import { exportSceneFile, importSceneFile, inspectZip, sceneFileName } from './features/sceneFile';
 import { findDuplicateGroups, findSimilar } from './features/phash';
+import { centerPoints, chainConnectors, defaultOrnamentSize, inkColor } from './features/ornaments';
+import { recenterOnResize, shouldRefit } from './features/viewport';
 import { isImageFile, isZipFile } from './features/imageTools';
 import { getBlob } from './core/persistence';
 import { toast, promptDialog, confirmDialog, saveDiscardDialog, closeMenus, clearOverlays } from './ui/dialogs';
@@ -61,6 +64,7 @@ import { showSettingsDialog } from './ui/settingsDialog';
 import { showScenesDialog } from './ui/scenesDialog';
 import { showManageImages } from './ui/manageImages';
 import { showExportDialog } from './ui/exportDialog';
+import { showOrnaments } from './ui/ornamentDialogs';
 import { showCommentDialog, showOpacityDialog, showPaletteDialog, showCanvasColorDialog, showShortcutsDialog } from './ui/itemDialogs';
 import { showAiDescribe, runAiTagging, showAiOrganize } from './ui/aiDialogs';
 import { importPinterestUrl, showPinterestImport } from './ui/importBoardDialog';
@@ -127,7 +131,7 @@ export class App {
     });
     onBitmapReady(() => this.renderer.requestDraw());
 
-    new ResizeObserver(() => this.renderer.resize()).observe(this.canvas);
+    new ResizeObserver(() => this.onCanvasResize()).observe(this.canvas);
     this.renderer.resize();
     this.bindKeyboard();
     this.bindClipboardAndDrop();
@@ -138,6 +142,29 @@ export class App {
     void requestPersistence();
     // sincronización entre dispositivos (sólo actúa si el usuario configuró su cuenta)
     void initSync(this);
+  }
+
+  /**
+   * El lienzo cambió de tamaño: rotación del dispositivo, Split View o la
+   * barra de Safari que aparece y desaparece.
+   *
+   * `viewport.x/y` está en píxeles del lienzo, así que sin corregirlo el
+   * tablero se va a una esquina al rotar. Si se estaba viendo entero y
+   * encuadrado, se vuelve a encuadrar; si el usuario tenía el zoom puesto en
+   * algo, se respeta y sólo se mantiene centrado lo que ya estaba al centro.
+   */
+  private onCanvasResize() {
+    const prev = this.gestures.viewSize();
+    const before = this.store.scene.viewport;
+    const bounds = this.gestures.contentBounds();
+    const refit = prev.w > 0 && shouldRefit(bounds, before, prev, this.gestures.viewInsets());
+
+    this.renderer.resize();
+
+    const next = this.gestures.viewSize();
+    if (prev.w <= 0 || prev.h <= 0 || (prev.w === next.w && prev.h === next.h)) return;
+    if (refit) this.gestures.fitToView();
+    else this.store.setViewport(recenterOnResize(before, prev, next));
   }
 
   applyTheme() {
@@ -800,6 +827,7 @@ export class App {
       { id: 'shortcuts', title: 'cmd_shortcuts', category: 'view', icon: 'keyboard', shortcut: 'Mod+/', run: () => showShortcutsDialog() },
       // organizar
       { id: 'arrange_optimal', title: 'cmd_arrange_optimal', category: 'arrange', icon: 'arrange', shortcut: 'Mod+Shift+O', enabled: multi, run: () => this.arrangeWith((i) => arrangeOptimal(i, this.arrangeOpts())) },
+      { id: 'arrange_masonry', title: 'cmd_arrange_masonry', category: 'arrange', icon: 'columns', shortcut: 'Mod+Shift+C', enabled: multi, run: () => this.arrangeWith((i) => arrangeMasonry(i, { ...this.arrangeOpts(), spanWide: true, air: appSettings.collageAir })) },
       { id: 'arrange_grid', title: 'cmd_arrange_grid', category: 'arrange', icon: 'grid', shortcut: 'Mod+Shift+G', enabled: multi, run: () => this.arrangeWith((i) => arrangeGrid(i, this.arrangeOpts())) },
       { id: 'arrange_horizontal', title: 'cmd_arrange_horizontal', category: 'arrange', shortcut: 'Mod+Shift+H', enabled: multi, run: () => this.arrangeWith((i) => arrangeRow(i, this.arrangeOpts())) },
       { id: 'arrange_vertical', title: 'cmd_arrange_vertical', category: 'arrange', shortcut: 'Mod+Shift+V', enabled: multi, run: () => this.arrangeWith((i) => arrangeColumn(i, this.arrangeOpts())) },
@@ -871,7 +899,10 @@ export class App {
       { id: 'ai_tag', title: 'cmd_ai_tag', category: 'ai', icon: 'tag', enabled: hasImg, run: () => runAiTagging(this) },
       { id: 'ai_organize', title: 'cmd_ai_organize', category: 'ai', icon: 'sparkles', enabled: () => S.scene.items.filter((i) => i.kind === 'image').length >= 2, run: () => showAiOrganize(this) },
       { id: 'ai_find_similar', title: 'cmd_ai_find_similar', category: 'ai', icon: 'similar', enabled: oneImg, run: () => this.findSimilarToSelection() },
-      { id: 'find_duplicates', title: 'cmd_find_duplicates', category: 'ai', icon: 'similar', run: () => this.findDuplicates() }
+      { id: 'find_duplicates', title: 'cmd_find_duplicates', category: 'ai', icon: 'similar', run: () => this.findDuplicates() },
+      // ornamentos
+      { id: 'ornaments', title: 'cmd_ornaments', category: 'item', icon: 'sparkles', run: () => showOrnaments(this) },
+      { id: 'connect_items', title: 'cmd_connect', category: 'item', icon: 'arrow', enabled: multi, run: () => this.connectSelection() }
     ];
     registerCommands(cmds);
   }
@@ -1019,6 +1050,52 @@ export class App {
     });
     this.store.commit(() => this.store.addItem(note));
     this.store.select([note.id]);
+  }
+
+  /**
+   * Conecta los ítems seleccionados con flechas, de izquierda a derecha: el
+   * ornamento que relaciona una referencia con otra. Todas las flechas quedan
+   * en un único dibujo, así que se deshacen (y se borran) de una vez.
+   */
+  connectSelection() {
+    const roots = this.roots().filter((r) => !r.locked);
+    if (roots.length < 2) {
+      toast(t('ui_connect_need_two'), { error: true });
+      return;
+    }
+    const boxes = roots
+      .map((r) => (r.kind === 'group' ? subtreeBounds(this.store.scene, r.id) ?? itemBounds(r) : itemBounds(r)))
+      .sort((a, b) => a.x - b.x || a.y - b.y);
+    const size = defaultOrnamentSize(boxes);
+    const gap = Math.max(2, size * 0.25);
+    const conns = chainConnectors(boxes, gap);
+    if (!conns.length) {
+      toast(t('ui_connect_need_two'), { error: true });
+      return;
+    }
+    const color = inkColor(this.store.scene.settings.canvasColor);
+    const width = Math.max(2, size * 0.1);
+    const flat = conns.flatMap((c) => [c.from, c.to]);
+    const centered = centerPoints(flat);
+    const d = createDrawingItem({ name: t('cmd_connect'), x: centered.x, y: centered.y, w: centered.w, h: centered.h });
+    for (let i = 0; i < conns.length; i++) {
+      const from = centered.points[i * 2]!;
+      const to = centered.points[i * 2 + 1]!;
+      d.strokes.push({
+        tool: 'arrow',
+        color,
+        width,
+        points: [
+          { x: from.x, y: from.y, p: 1 },
+          { x: to.x, y: to.y, p: 1 }
+        ]
+      });
+    }
+    this.store.commit(() => {
+      this.store.addItem(d);
+      this.store.select([d.id]);
+    });
+    toast(t('ui_connect_done', { count: conns.length }));
   }
 
   findSimilarToSelection() {

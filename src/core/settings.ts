@@ -34,7 +34,16 @@ export interface AppSettings {
   aiCategories: string;
   /** Si es true, la IA propone las categorías según el tablero en vez de usar `aiCategories` */
   aiCategoriesAdHoc: boolean;
+  /**
+   * Aire del collage: separación entre imágenes como fracción del ancho de
+   * columna. Un tablero apretado y uno que respira son decisiones de gusto, y
+   * cambian según el uso, así que se guarda como preferencia.
+   */
+  collageAir: number;
 }
+
+/** Opciones de aire del collage (fracción del ancho de columna). */
+export const COLLAGE_AIR = { dense: 0.03, balanced: 0.08, wide: 0.18 } as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   language: 'es',
@@ -52,7 +61,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiModel: 'claude-haiku-4-5',
   googleClientId: '',
   aiCategories: 'Poses, Texturas, Ropa',
-  aiCategoriesAdHoc: false
+  aiCategoriesAdHoc: false,
+  collageAir: COLLAGE_AIR.balanced
 };
 
 export let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
@@ -64,15 +74,60 @@ export function onSettingsChange(fn: (s: AppSettings) => void): () => void {
   return () => listeners.delete(fn);
 }
 
+/**
+ * Copia de respaldo de la clave API en `localStorage`.
+ *
+ * La clave vive en IndexedDB junto al resto de los ajustes, pero Safari puede
+ * vaciar esa base (o fallar al abrirla) y la clave sólo se ve una vez en la
+ * consola de Anthropic: perderla obliga a crear otra. Este espejo permite
+ * recuperarla. No cambia quién puede leerla: los dos almacenes pertenecen al
+ * mismo origen y nunca salen del dispositivo.
+ */
+const KEY_BACKUP = 'moodboard.aiApiKey';
+
+/** Lee el respaldo; devuelve '' si no hay o si el almacén no está disponible. */
+function readKeyBackup(): string {
+  try {
+    return localStorage.getItem(KEY_BACKUP) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Guarda (o borra) el respaldo. Nunca lanza. */
+function writeKeyBackup(key: string): void {
+  try {
+    if (key) localStorage.setItem(KEY_BACKUP, key);
+    else localStorage.removeItem(KEY_BACKUP);
+  } catch {
+    /* modo privado o almacén lleno: el respaldo es un extra */
+  }
+}
+
 export async function loadAppSettings(): Promise<AppSettings> {
   const saved = await getKV<Partial<AppSettings>>('appSettings', {});
   appSettings = { ...DEFAULT_SETTINGS, ...saved };
+  // si IndexedDB perdió la clave pero queda el respaldo, se restaura
+  if (!appSettings.aiApiKey) {
+    const backup = readKeyBackup();
+    if (backup) {
+      appSettings = { ...appSettings, aiApiKey: backup };
+      try {
+        await setKV('appSettings', appSettings);
+      } catch {
+        /* si tampoco se puede escribir, al menos la sesión actual la tiene */
+      }
+    }
+  } else if (appSettings.aiApiKey !== readKeyBackup()) {
+    writeKeyBackup(appSettings.aiApiKey);
+  }
   for (const l of listeners) l(appSettings);
   return appSettings;
 }
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<void> {
   appSettings = { ...appSettings, ...patch };
+  if (patch.aiApiKey !== undefined) writeKeyBackup(patch.aiApiKey);
   await setKV('appSettings', appSettings);
   for (const l of listeners) l(appSettings);
 }

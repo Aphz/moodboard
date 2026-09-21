@@ -445,6 +445,40 @@ export class Renderer {
     return hs;
   }
 
+  /**
+   * Rótulo flotante con el nombre del grupo, encima de su caja. Va en píxeles
+   * de pantalla (no escala con el zoom) y nunca se exporta.
+   */
+  private drawGroupLabel(name: string, s: Rect) {
+    const text = (name ?? '').trim();
+    if (!text || this.exporting) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '600 13px system-ui, -apple-system, "Helvetica Neue", sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    const padX = 10;
+    const h = 24;
+    const w = Math.min(ctx.measureText(text).width + padX * 2, Math.max(60, this.width - 16));
+    // centrado sobre el grupo, dentro del lienzo, y por debajo si no cabe arriba
+    const cx = Math.min(Math.max(s.x + s.w / 2, w / 2 + 8), Math.max(w / 2 + 8, this.width - w / 2 - 8));
+    // por encima del tirador de rotación, que vive sobre el borde superior
+    const above = s.y - h - ROTATE_HANDLE_OFFSET - 10;
+    const y = above >= 8 ? above : Math.min(s.y + 8, this.height - h - 8);
+    ctx.beginPath();
+    roundRect(ctx, cx - w / 2, y, w, h, 12);
+    ctx.fillStyle = 'rgba(10,132,255,0.92)';
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - w / 2 + padX / 2, y, w - padX, h);
+    ctx.clip();
+    ctx.fillText(text, cx, y + h / 2);
+    ctx.restore();
+    ctx.restore();
+  }
+
   private drawSelection(scene: Scene) {
     const { ctx, store } = this;
     if (store.selection.size === 0) return;
@@ -466,6 +500,9 @@ export class Renderer {
           ctx.setLineDash([8, 4]);
           ctx.strokeRect(s.x, s.y, s.w, s.h);
           ctx.setLineDash([]);
+          // el nombre del grupo sólo aparece al seleccionarlo: da el contexto
+          // sin dejar un rótulo fijo encima del tablero
+          this.drawGroupLabel(it.name, s);
         }
         continue;
       }

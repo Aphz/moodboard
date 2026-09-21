@@ -1,11 +1,12 @@
 /**
  * Pruebas de la disposición por categorías (src/features/organize.ts): cada
- * categoría queda como un bloque compacto, los bloques no se solapan, todos
- * los ítems reciben posición y el hueco del título queda sobre cada bloque.
+ * categoría queda como un bloque compacto de columnas (con las apaisadas a
+ * doble ancho), los bloques no se solapan, todos los ítems reciben posición y
+ * el hueco del título queda sobre cada bloque.
  */
 import { describe, expect, it } from 'vitest';
 import { createImageItem, itemBounds, unionRects, type ImageItem, type Rect } from '../src/core/model';
-import { clustersFromAssignments, layoutByCategory } from '../src/features/organize';
+import { clustersFromAssignments, layoutByCategory, shareColumns } from '../src/features/organize';
 
 function img(id: string, w: number, h: number, x = 0, y = 0): ImageItem {
   return createImageItem('b', w, h, { id, name: id, x, y });
@@ -16,6 +17,11 @@ function overlaps(a: Rect, b: Rect): boolean {
 }
 
 const OPTS = { padding: 10, gap: 60, titleHeight: 80, aspect: 1.5 };
+
+/** Caja de un ítem ya colocado, aplicando la escala que trae el collage. */
+function boxOf(it: ImageItem, pl: { x: number; y: number; scale?: number }): Rect {
+  return itemBounds({ ...it, x: pl.x, y: pl.y, scale: pl.scale ?? it.scale });
+}
 
 describe('layoutByCategory', () => {
   const items = [
@@ -31,6 +37,16 @@ describe('layoutByCategory', () => {
     { title: 'Vacía', ids: [] },
     { title: 'Fantasma', ids: ['zzz'] }
   ];
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const placementOf = (out: ReturnType<typeof layoutByCategory>, id: string) => out.placements.find((p) => p.id === id)!;
+
+  it('deja los bloques de alto parejo: ninguno pasa de 1,5 veces el más bajo', () => {
+    const out = layoutByCategory(items, clusters, OPTS);
+    const alturas = out.clusters.map((c) => c.content.h);
+    // el reparto de columnas trabaja con estimaciones, y una imagen a doble
+    // ancho mueve el bloque de golpe, así que la tolerancia no puede ser fina
+    expect(Math.max(...alturas)).toBeLessThanOrEqual(Math.min(...alturas) * 1.5);
+  });
 
   it('coloca todos los ítems y descarta las categorías vacías o sin ítems conocidos', () => {
     const out = layoutByCategory(items, clusters, OPTS);
@@ -38,26 +54,47 @@ describe('layoutByCategory', () => {
     expect(out.clusters.map((c) => c.title)).toEqual(['Poses', 'Texturas']);
   });
 
-  it('los bloques no se solapan entre sí ni las imágenes dentro de un bloque', () => {
+  it('lleva cada imagen a una columna, o a dos si es apaisada', () => {
+    const out = layoutByCategory(items, clusters, OPTS);
+    const anchos = new Map(out.placements.map((p) => [p.id, boxOf(byId.get(p.id)!, p).w]));
+    // la columna es el ancho más chico del tablero; el doble ancho suma el hueco
+    const colW = Math.min(...anchos.values());
+    const dobleW = 2 * colW + OPTS.padding;
+    for (const [id, w] of anchos) {
+      const it = byId.get(id)!;
+      expect(w).toBeCloseTo(it.w / it.h >= 1.6 ? dobleW : colW, 6);
+    }
+    // 'd' (400x200) es la única apaisada de verdad: va a doble ancho
+    expect(anchos.get('d')).toBeCloseTo(dobleW, 6);
+    // y cada una conserva su proporción
+    for (const p of out.placements) {
+      const it = byId.get(p.id)!;
+      const b = boxOf(it, p);
+      expect(b.h / b.w).toBeCloseTo(it.h / it.w, 6);
+    }
+  });
+
+  it('ninguna imagen se solapa con otra, ni dentro ni entre categorías', () => {
+    const out = layoutByCategory(items, clusters, OPTS);
+    const boxes = out.placements.map((p) => boxOf(byId.get(p.id)!, p));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) expect(overlaps(boxes[i]!, boxes[j]!)).toBe(false);
+    }
+  });
+
+  it('las categorías ocupan franjas horizontales separadas', () => {
     const out = layoutByCategory(items, clusters, OPTS);
     const [p, q] = out.clusters;
     expect(overlaps(p!.rect, q!.rect)).toBe(false);
-    const byId = new Map(items.map((i) => [i.id, i]));
-    const boxes = out.placements.map((pl) => itemBounds({ ...byId.get(pl.id)!, x: pl.x, y: pl.y }));
-    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(overlaps(boxes[i]!, boxes[j]!)).toBe(false);
+    expect(q!.rect.x).toBeGreaterThanOrEqual(p!.rect.x + p!.rect.w);
   });
 
   it('cada imagen queda dentro de la caja de contenido de su categoría, bajo el título', () => {
     const out = layoutByCategory(items, clusters, OPTS);
-    const byId = new Map(items.map((i) => [i.id, i]));
     for (const c of out.clusters) {
       expect(c.rect.h).toBeCloseTo(c.content.h + OPTS.titleHeight, 6);
-      expect(c.rect.y).toBeCloseTo(c.content.y - OPTS.titleHeight, 6);
-      const boxes = c.ids.map((id) => {
-        const pl = out.placements.find((p) => p.id === id)!;
-        return itemBounds({ ...byId.get(id)!, x: pl.x, y: pl.y });
-      });
-      const u = unionRects(boxes)!;
+      expect(c.content.y).toBeCloseTo(c.rect.y + OPTS.titleHeight, 6);
+      const u = unionRects(c.ids.map((id) => boxOf(byId.get(id)!, placementOf(out, id))))!;
       expect(u.x).toBeGreaterThanOrEqual(c.content.x - 1e-6);
       expect(u.y).toBeGreaterThanOrEqual(c.content.y - 1e-6);
       expect(u.x + u.w).toBeLessThanOrEqual(c.content.x + c.content.w + 1e-6);
@@ -65,14 +102,52 @@ describe('layoutByCategory', () => {
     }
   });
 
-  it('una sola categoría con un solo ítem no lo mueve', () => {
-    const out = layoutByCategory([img('solo', 100, 100, 42, 43)], [{ title: 'Uno', ids: ['solo'] }], OPTS);
-    expect(out.placements).toEqual([{ id: 'solo', x: 42, y: 43 }]);
-    expect(out.clusters[0]!.rect).toEqual({ x: -8, y: -7 - 80, w: 100, h: 180 });
+  it('sin títulos el bloque empieza justo en las imágenes', () => {
+    const out = layoutByCategory(items, clusters, { ...OPTS, titleHeight: 0 });
+    for (const c of out.clusters) {
+      expect(c.rect.y).toBeCloseTo(c.content.y, 6);
+      expect(c.rect.h).toBeCloseTo(c.content.h, 6);
+    }
+  });
+
+  it('una sola categoría con un solo ítem lo lleva al ancho de columna', () => {
+    const solo = img('solo', 100, 200, 42, 43);
+    const out = layoutByCategory([solo], [{ title: 'Uno', ids: ['solo'] }], { ...OPTS, titleHeight: 0 });
+    expect(out.placements).toHaveLength(1);
+    const b = boxOf(solo, out.placements[0]!);
+    expect(b.w).toBeCloseTo(100, 6); // única imagen: su propio ancho es la mediana
+    expect(out.clusters[0]!.rect).toEqual({ x: 0, y: 0, w: 100, h: 200 });
   });
 
   it('sin ítems devuelve vacío', () => {
     expect(layoutByCategory([], clusters, OPTS)).toEqual({ placements: [], clusters: [] });
+  });
+});
+
+describe('shareColumns', () => {
+  it('reparte en proporción al peso y la suma cuadra', () => {
+    const out = shareColumns([300, 100], 8);
+    expect(out.reduce((a, b) => a + b, 0)).toBe(8);
+    expect(out[0]).toBeGreaterThan(out[1]!);
+  });
+
+  it('da al menos una columna a cada categoría aunque pese poco', () => {
+    expect(shareColumns([1000, 1], 3)).toEqual([2, 1]);
+    expect(shareColumns([1000, 1, 1], 3)).toEqual([1, 1, 1]);
+  });
+
+  it('nunca devuelve menos columnas que categorías', () => {
+    expect(shareColumns([5, 5, 5], 1)).toEqual([1, 1, 1]);
+  });
+
+  it('equilibra: la categoría más pesada recibe las columnas que sobran', () => {
+    // dos categorías, una el triple de alta: con 4 columnas le tocan 3
+    expect(shareColumns([300, 100], 4)).toEqual([3, 1]);
+  });
+
+  it('con pesos cero reparte parejo', () => {
+    expect(shareColumns([0, 0], 4)).toEqual([2, 2]);
+    expect(shareColumns([], 4)).toEqual([]);
   });
 });
 

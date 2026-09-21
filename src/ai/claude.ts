@@ -16,6 +16,7 @@
  * un contador acumulado local (`recordUsage` / `getAiUsage` / `resetAiUsage`).
  */
 import { appSettings } from '../core/settings';
+import { cleanSymbols } from '../features/ornaments';
 import { getKV, setKV } from '../core/persistence';
 import { DEFAULT_AI_MODEL, isKnownModel, usageToUsd, type UsageEstimate } from './pricing';
 
@@ -46,6 +47,12 @@ export const MAX_TOKENS_ARRANGE = 600;
 /** Tope de salida por lote al clasificar en categorías (JSON corto). */
 export const MAX_TOKENS_CLASSIFY = 500;
 
+/** Tope de salida al sugerir simbología (mood + una lista corta de signos). */
+export const MAX_TOKENS_ORNAMENTS = 300;
+
+/** Máximo de imágenes que se envían al sugerir simbología (sólo si faltan etiquetas). */
+const ORNAMENT_IMAGES = 6;
+
 /** Máximo de categorías que la IA puede proponer por sí sola. */
 export const MAX_AD_HOC_CATEGORIES = 7;
 
@@ -75,6 +82,14 @@ export type ContentBlock =
       source: { type: 'base64'; media_type: 'image/jpeg'; data: string };
     };
 
+/**
+ * Mensaje de saldo agotado. La API de Anthropic se paga aparte de la
+ * suscripción de Claude.ai: los créditos se compran en console.anthropic.com.
+ */
+export const NO_CREDIT =
+  'Sin saldo en la API de Anthropic. Es una cuenta aparte de la suscripción de Claude.ai: ' +
+  'compra créditos en console.anthropic.com → Plans & Billing (Billing).';
+
 /** Error de la capa IA; `status` es el código HTTP cuando lo hay. */
 export class AiError extends Error {
   status?: number;
@@ -91,6 +106,17 @@ export function aiAvailable(): boolean {
 }
 
 /** Versión ofuscada de una clave: sólo se muestran los últimos 4 caracteres. */
+/**
+ * ¿Tiene forma de clave de Anthropic? Sirve para no guardar por error una
+ * cadena vacía, el texto ofuscado o una contraseña que iOS haya autocompletado
+ * en el campo: la clave sólo se ve una vez en la consola, así que perderla
+ * obliga a crear otra.
+ */
+export function isApiKeyLike(value: string): boolean {
+  const v = (value ?? '').trim();
+  return /^sk-[A-Za-z0-9_-]{20,}$/.test(v);
+}
+
 export function redactKey(key: string): string {
   const k = key.trim();
   if (!k) return '';
@@ -176,22 +202,32 @@ interface ApiResponse {
 /** Construye el AiError adecuado a partir de una respuesta HTTP fallida. */
 async function errorFromResponse(res: Response): Promise<AiError> {
   if (res.status === 401) return new AiError('clave inválida', 401);
-  if (res.status === 429) {
-    return new AiError('límite de uso o sin crédito en la cuenta de Anthropic', 429);
-  }
   let detail = `error ${res.status}`;
+  let raw = '';
   try {
     const body: unknown = await res.json();
     const msg = (body as { error?: { message?: string } } | null)?.error?.message;
-    if (typeof msg === 'string' && msg) detail = msg;
+    if (typeof msg === 'string' && msg) {
+      raw = msg;
+      detail = msg;
+    }
   } catch {
     try {
       const txt = await res.text();
-      if (txt) detail = txt.slice(0, 300);
+      if (txt) {
+        raw = txt;
+        detail = txt.slice(0, 300);
+      }
     } catch {
       /* cuerpo ilegible: se mantiene el mensaje genérico */
     }
   }
+  // Saldo de la API agotado: es una cuenta distinta de la suscripción de
+  // Claude.ai, así que conviene decirlo con todas sus letras.
+  if (/credit balance is too low|insufficient.*credit/i.test(raw)) {
+    return new AiError(NO_CREDIT, res.status);
+  }
+  if (res.status === 429) return new AiError('límite de peticiones por minuto: espera un momento y reintenta', 429);
   return new AiError(detail, res.status);
 }
 
@@ -567,4 +603,59 @@ export async function classifyImages(input: {
   }
 
   return { result: { categories: usedOther ? [...known, other] : known, assignments }, usage };
+}
+
+/** Simbología propuesta para un tablero: el mood en pocas palabras y sus signos. */
+export interface OrnamentSuggestion {
+  /** Mood del tablero en 2 a 4 palabras, para mostrarlo tal cual. */
+  mood: string;
+  /** Signos breves (glifos o marcas de hasta 6 caracteres), ya saneados. */
+  symbols: string[];
+}
+
+/**
+ * Propone el mood del tablero y la simbología que lo acompaña: flechas,
+ * asteriscos, cruces, marcas de referencia… los signos que se dibujan a mano
+ * sobre un moodboard.
+ *
+ * Es la llamada más barata de la capa IA: con etiquetas basta el texto (unos
+ * cientos de tokens). Sólo si el tablero no tiene etiquetas ni categorías se
+ * mandan hasta 6 miniaturas para no adivinar el mood a ciegas.
+ */
+export async function suggestOrnaments(input: {
+  board: string;
+  tags: string[];
+  categories: string[];
+  palette: string[];
+  images?: { jpegBase64: string }[];
+  lang: AiLang;
+}): Promise<{ result: OrnamentSuggestion; usage: AiUsage }> {
+  const tags = input.tags.map(normalizeTag).filter((t): t is string => t !== null).slice(0, 30);
+  const categories = input.categories.map((c) => c.trim()).filter(Boolean).slice(0, 10);
+  const palette = input.palette.filter((c) => typeof c === 'string' && c.trim()).slice(0, 6);
+  const pistas = tags.length + categories.length;
+
+  const system =
+    `Eres director de arte y montas moodboards a mano. ${baseRules(input.lang)} ` +
+    'Di el mood del tablero en 2 a 4 palabras y propón entre 6 y 10 signos tipográficos breves que ' +
+    'lo acompañen: flechas, asteriscos, cruces, guiones, números de referencia, marcas cortas. ' +
+    'Cada signo, como mucho 6 caracteres, en una sola línea y sin emoji de color. ' +
+    'Devuelve sólo JSON: { "mood": "...", "symbols": ["..."] }.';
+
+  const content: ContentBlock[] = [];
+  if (pistas < 3 && input.images?.length) {
+    for (const img of input.images.slice(0, ORNAMENT_IMAGES)) content.push(imageBlock(img.jpegBase64));
+  }
+  content.push({
+    type: 'text',
+    text:
+      'Tablero (JSON):\n' +
+      JSON.stringify({ nombre: input.board, categorias: categories, etiquetas: tags, paleta: palette }, null, 0) +
+      '\n\nPropón el mood y su simbología.'
+  });
+
+  const res = await callClaude({ system, content, maxTokens: MAX_TOKENS_ORNAMENTS, json: true });
+  const parsed = parseJsonLoose(res.text) as { mood?: unknown; symbols?: unknown };
+  const mood = typeof parsed.mood === 'string' ? parsed.mood.trim().replace(/\s+/g, ' ').slice(0, 60) : '';
+  return { result: { mood, symbols: cleanSymbols(parsed.symbols) }, usage: res.usage };
 }

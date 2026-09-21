@@ -102,7 +102,9 @@ que PureRef 2.1.
 - **Notas** con markdown ligero (negrita, cursiva, viñetas, enlaces), tamaño, color, fondo, alineación y alto automático.
 - **Dibujo** con lápiz, línea, flecha, rectángulo y elipse; presión de Apple Pencil; opacidad por dibujo.
 - **Jerarquía**: grupos y relación padre/hijo (`⌘G`, `P`), panel de árbol con búsqueda, visibilidad, bloqueo e indicador de recorte.
-- **Organizar**: óptimo (empaquetado por estanterías), cuadrícula, fila, columna, aleatorio y por color; normalizar tamaño y área; alinear, distribuir y apilar.
+- **Organizar**: collage en columnas (las apaisadas a doble ancho, con el aire que elijas), óptimo (empaquetado por estanterías), cuadrícula, fila, columna, aleatorio y por color; normalizar tamaño y área; alinear, distribuir y apilar.
+- **Símbolos, ornamentos y conectores**: signos sueltos acordes al mood del tablero, puestos en los claros sin tapar imágenes, y flechas entre referencias. Funciona sin clave API; con ella, la IA propone el mood y su repertorio.
+- **Encuadre a prueba de rotaciones**: el ajuste respeta las barras flotantes y el área segura, y al girar el dispositivo el tablero no se va a una esquina — si lo veías completo, lo sigues viendo completo; si estabas con zoom en un detalle, se respeta.
 - **Historial** por instantáneas con transacciones: un gesto completo es un solo paso de deshacer (`⌘Z` / `⌘⇧Z`).
 - **Escenas** múltiples con miniaturas y recientes; guardado automático cada 5 s (configurable).
 - **Exportar** el tablero o la selección como PNG/JPEG (con o sin hijos, escala y fondo a elección) y compartir con la hoja nativa de iOS; exportar/importar el formato abierto `.moodboard`.
@@ -117,15 +119,22 @@ La tabla completa, comparada función por función con PureRef 2.1.x, está en
 ## Funciones IA (opcionales)
 
 Están apagadas por defecto y solo se activan si pegas **tu propia clave API de Anthropic**
-en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store `kv`),
-nunca se sube a ninguna parte y se muestra ofuscada. Sin clave, los comandos IA quedan
+en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store `kv`, con
+copia de respaldo en `localStorage` por si Safari vacía la base), nunca se sube a ninguna
+parte y se muestra ofuscada. Sólo se guarda si tiene forma de clave (`sk-ant-…`): un campo
+vacío o una contraseña autocompletada por iOS no la pisan, y para quitarla hay un botón
+explícito. Sin clave, los comandos IA quedan
 desactivados y ni siquiera aparecen en los menús.
 
 - **IA: describir tablero** — manda miniaturas de hasta 20 imágenes y el texto de las notas, y devuelve una descripción en markdown que puedes insertar como nota.
 - **IA: etiquetar imágenes seleccionadas** — devuelve etiquetas por imagen y las agrega a `item.tags` en un solo paso de deshacer.
+- **IA: símbolos y ornamentos** — lee el mood del tablero y propone los signos que lo acompañan. Es una llamada de texto (etiquetas, categorías y paleta), de las más baratas que hay; sólo manda seis miniaturas de 192 px si el tablero todavía no tiene etiquetas ni grupos. Sin clave, el mood y los signos salen del catálogo local.
 - **IA: organizar por categorías** — clasifica las imágenes con tus categorías (por defecto *Poses, Texturas, Ropa*) o con las que la IA proponga para el tablero, y las recoloca en bloques con un grupo y un título por categoría. Es la función más barata: miniaturas de 256 px, unos 90 tokens por imagen. Es también el segundo paso de **Importar tablero de Pinterest…**, que trae los pines de un tablero a partir de su enlace (ver [docs/PINTEREST.md](docs/PINTEREST.md)).
 
-Modelo por defecto: `claude-haiku-4-5` (editable en Ajustes). Las llamadas van directo desde
+Antes de cada llamada se elige el modelo (Haiku 4.5 por defecto, el más
+económico); el gasto real aparece al terminar y se acumula en Ajustes. La API
+de Anthropic se paga **aparte de la suscripción de Claude.ai**: los créditos se
+compran en console.anthropic.com → Plans & Billing. Las llamadas van directo desde
 el navegador a `https://api.anthropic.com/v1/messages` con la cabecera
 `anthropic-dangerous-direct-browser-access`; no hay proxy ni servidor intermedio.
 

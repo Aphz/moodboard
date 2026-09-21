@@ -9,10 +9,11 @@ import { createGroupItem, createNoteItem, type ImageItem, type ItemId } from '..
 import { clustersFromAssignments, layoutByCategory } from '../features/organize';
 import { getLanguage, t } from '../i18n';
 import { h, miniMarkdown } from './dom';
-import { showDialog, toast } from './dialogs';
+import { confirmDialog, showDialog, toast } from './dialogs';
 import {
   aiAvailable,
   classifyImages,
+  isApiKeyLike,
   describeBoard,
   tagImages,
   redactKey,
@@ -21,21 +22,17 @@ import {
   getAiUsage,
   resetAiUsage,
   AiError,
-  MAX_TOKENS_CLASSIFY,
-  MAX_TOKENS_DESCRIBE,
-  MAX_TOKENS_TAG,
   type AiUsage
 } from '../ai/claude';
 import {
   AI_MODELS,
   AI_THUMB_MAX_SIDE,
-  estimateRequest,
   formatTokens,
   formatUsd,
   modelLabel,
   modelPriceLabel
 } from '../ai/pricing';
-import { appSettings, updateAppSettings } from '../core/settings';
+import { COLLAGE_AIR, appSettings, updateAppSettings } from '../core/settings';
 import { ensureBitmaps, getBitmap } from '../render/imageCache';
 
 /** Calidad JPEG de las miniaturas que se envían (baja a propósito: menos tokens). */
@@ -71,6 +68,19 @@ async function thumbBase64(
   return data ? { data, w: c.width, h: c.height } : null;
 }
 
+/**
+ * Miniaturas muy pequeñas (192 px) para leer el mood del tablero cuando no hay
+ * etiquetas: bastan para el ambiente y cuestan unos 50 tokens cada una.
+ */
+export async function moodThumbs(images: ImageItem[], max = 6): Promise<{ jpegBase64: string }[]> {
+  const out: { jpegBase64: string }[] = [];
+  for (const img of images.slice(0, max)) {
+    const th = await thumbBase64(img, 192);
+    if (th) out.push({ jpegBase64: th.data });
+  }
+  return out;
+}
+
 function requireKey(): boolean {
   if (aiAvailable()) return true;
   toast(t('ui_ai_no_key'), { error: true });
@@ -84,7 +94,7 @@ function modelSelect(onChange: (id: string) => void): HTMLSelectElement {
     'select',
     null,
     ...AI_MODELS.map((m) =>
-      h('option', { value: m.id, selected: m.id === current || undefined }, `${modelLabel(m.id)} · ${modelPriceLabel(m.id)}`)
+      h('option', { value: m.id, selected: m.id === current || undefined }, modelLabel(m.id))
     )
   );
   sel.addEventListener('change', () => {
@@ -95,15 +105,13 @@ function modelSelect(onChange: (id: string) => void): HTMLSelectElement {
 }
 
 /**
- * Diálogo previo a llamar a la API: dice qué se enviará, con qué modelo y
- * cuánto costaría aproximadamente. Devuelve `true` si el usuario continúa.
+ * Diálogo previo a llamar a la API: qué se enviará y con qué modelo. Sin
+ * cifras de consumo: el gasto real queda en el contador de Ajustes.
  */
 function confirmAiRun(opts: {
   title: string;
   images: { w: number; h: number }[];
   notes: number;
-  textChars: number;
-  maxOutput: number;
   /** Lado de las miniaturas que se envían (por defecto `AI_THUMB_MAX_SIDE`). */
   px?: number;
 }): Promise<boolean> {
@@ -115,25 +123,6 @@ function confirmAiRun(opts: {
       d.close();
       resolve(v);
     };
-
-    const cost = h('p', { class: 'ai-cost' });
-    const price = h('div', { class: 'hint' });
-    const refresh = () => {
-      const model = resolveModel();
-      const est = estimateRequest({
-        model,
-        images: opts.images,
-        textChars: opts.textChars,
-        maxOutput: opts.maxOutput
-      });
-      cost.textContent = t('ui_ai_confirm_cost', {
-        usd: formatUsd(est.usd),
-        tokens: formatTokens(est.inputTokens + est.outputTokens)
-      });
-      price.textContent = modelPriceLabel(model);
-    };
-    const sel = modelSelect(refresh);
-    refresh();
 
     const d = showDialog(
       [
@@ -147,9 +136,7 @@ function confirmAiRun(opts: {
             notes: opts.notes
           })
         ),
-        h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), sel, price),
-        cost,
-        h('p', { class: 'hint' }, t('ui_ai_confirm_billing')),
+        h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), modelSelect(() => undefined)),
         h(
           'div',
           { class: 'actions' },
@@ -162,14 +149,11 @@ function confirmAiRun(opts: {
   });
 }
 
-/** Suma el consumo al contador local y avisa el costo real. */
+/** Suma el consumo al contador local y avisa el resultado con su costo real. */
 function reportUsage(usage: AiUsage, calls: number, extra = ''): void {
   void recordUsage(usage, calls);
-  const line = t('ui_ai_cost_toast', {
-    usd: formatUsd(usage.usd),
-    tokens: formatTokens(usage.inputTokens + usage.outputTokens)
-  });
-  toast(extra ? `${extra} · ${line}` : line);
+  const cost = formatUsd(usage.usd);
+  toast(extra ? `${extra} · ${cost}` : cost);
 }
 
 export async function showAiDescribe(app: App) {
@@ -195,13 +179,7 @@ export async function showAiDescribe(app: App) {
   }
   prep.close();
 
-  const ok = await confirmAiRun({
-    title: t('cmd_ai_describe'),
-    images: dims,
-    notes: notes.length,
-    textChars: notes.join(' ').length + 500,
-    maxOutput: MAX_TOKENS_DESCRIBE
-  });
+  const ok = await confirmAiRun({ title: t('cmd_ai_describe'), images: dims, notes: notes.length });
   if (!ok) return;
 
   const tt = toast(t('ui_ai_thinking'), { spinner: true });
@@ -247,13 +225,7 @@ export async function runAiTagging(app: App) {
   if (!images.length) return;
 
   const calls = Math.max(1, Math.ceil(images.length / TAG_BATCH));
-  const ok = await confirmAiRun({
-    title: t('cmd_ai_tag'),
-    images: dims,
-    notes: 0,
-    textChars: images.reduce((n, i) => n + i.id.length + i.name.length + 20, 0) + 500 * calls,
-    maxOutput: MAX_TOKENS_TAG * calls
-  });
+  const ok = await confirmAiRun({ title: t('cmd_ai_tag'), images: dims, notes: 0 });
   if (!ok) return;
 
   const tt = toast(t('ui_ai_thinking'), { spinner: true });
@@ -302,7 +274,7 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
 
   const choice = await organizeOptionsDialog(pool.length);
   if (!choice) return;
-  void updateAppSettings({ aiCategories: choice.categoriesText, aiCategoriesAdHoc: choice.adHoc });
+  void updateAppSettings({ aiCategories: choice.categoriesText, aiCategoriesAdHoc: choice.adHoc, collageAir: choice.air });
   const categories = choice.adHoc ? [] : parseCategories(choice.categoriesText);
   if (!choice.adHoc && !categories.length) {
     toast(t('ui_org_no_categories'), { error: true });
@@ -311,12 +283,10 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
 
   const prep = toast(t('ui_ai_preparing'), { spinner: true });
   const images: { id: string; name: string; jpegBase64: string }[] = [];
-  const dims: { w: number; h: number }[] = [];
   for (const img of pool) {
     const th = await thumbBase64(img, AI_CLASSIFY_THUMB_SIDE);
     if (!th) continue;
     images.push({ id: img.id, name: img.name, jpegBase64: th.data });
-    dims.push({ w: th.w, h: th.h });
   }
   prep.close();
   if (images.length < 2) {
@@ -325,21 +295,11 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
   }
 
   const calls = Math.max(1, Math.ceil(images.length / TAG_BATCH));
-  const ok = await confirmAiRun({
-    title: t('ui_org_title'),
-    images: dims,
-    notes: 0,
-    textChars: images.reduce((n, i) => n + i.id.length + i.name.length + 20, 0) + 600 * calls,
-    maxOutput: MAX_TOKENS_CLASSIFY * calls,
-    px: AI_CLASSIFY_THUMB_SIDE
-  });
-  if (!ok) return;
-
   const tt = toast(t('ui_ai_thinking'), { spinner: true });
   try {
     const { result, usage } = await classifyImages({ images, categories, lang: getLanguage() });
     tt.close();
-    applyOrganize(app, result.assignments, result.categories, { group: choice.group, titles: choice.titles });
+    applyOrganize(app, result.assignments, result.categories, { group: choice.group, titles: choice.titles, air: choice.air });
     reportUsage(usage, calls, t('ui_org_done', { categories: result.categories.length }));
   } catch (e) {
     tt.close();
@@ -347,11 +307,21 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
   }
 }
 
-/** Opciones del diálogo de organizar: modo, categorías, grupos y títulos. */
-function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categoriesText: string; group: boolean; titles: boolean } | null> {
+/** Opciones del diálogo de organizar. */
+interface OrganizeChoice {
+  adHoc: boolean;
+  categoriesText: string;
+  group: boolean;
+  titles: boolean;
+  /** Aire entre imágenes, como fracción del ancho de columna. */
+  air: number;
+}
+
+/** Opciones del diálogo de organizar: modo, categorías, grupos, títulos y aire. */
+function organizeOptionsDialog(count: number): Promise<OrganizeChoice | null> {
   return new Promise((resolve) => {
     let done = false;
-    const fin = (v: { adHoc: boolean; categoriesText: string; group: boolean; titles: boolean } | null) => {
+    const fin = (v: OrganizeChoice | null) => {
       if (done) return;
       done = true;
       d.close();
@@ -361,7 +331,21 @@ function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categor
     const presetR = h('input', { type: 'radio', name: 'org-mode', checked: !appSettings.aiCategoriesAdHoc || undefined });
     const cats = h('input', { type: 'text', value: appSettings.aiCategories, autocapitalize: 'words', placeholder: 'Poses, Texturas, Ropa' });
     const group = h('input', { type: 'checkbox', checked: true });
-    const titles = h('input', { type: 'checkbox', checked: true });
+    // sin marcar: el nombre de la categoría se ve al tocar el grupo, así que
+    // un rótulo fijo sólo hace falta para que salga en la exportación
+    const titles = h('input', { type: 'checkbox' });
+    const model = modelSelect(() => undefined);
+    const air = h(
+      'select',
+      null,
+      ...([
+        ['dense', COLLAGE_AIR.dense],
+        ['balanced', COLLAGE_AIR.balanced],
+        ['wide', COLLAGE_AIR.wide]
+      ] as const).map(([id, v]) =>
+        h('option', { value: String(v), selected: appSettings.collageAir === v || undefined }, t(`ui_org_air_${id}`))
+      )
+    );
     const syncCats = () => {
       cats.disabled = adHoc.checked;
       cats.style.opacity = adHoc.checked ? '0.5' : '';
@@ -382,13 +366,25 @@ function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categor
         h('div', { class: 'field' }, cats, h('div', { class: 'hint' }, t('ui_org_categories_hint'))),
         h('label', { class: 'row' }, group, h('span', null, t('ui_org_group'))),
         h('label', { class: 'row' }, titles, h('span', null, t('ui_org_titles'))),
+        h('div', { class: 'field' }, h('label', null, t('ui_org_air')), air, h('div', { class: 'hint' }, t('ui_org_air_hint'))),
+        h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), model),
         h(
           'div',
           { class: 'actions' },
           h('button', { class: 'btn', onclick: () => fin(null) }, t('ui_cancel')),
           h(
             'button',
-            { class: 'btn primary', onclick: () => fin({ adHoc: adHoc.checked, categoriesText: cats.value, group: group.checked, titles: titles.checked }) },
+            {
+              class: 'btn primary',
+              onclick: () =>
+                fin({
+                  adHoc: adHoc.checked,
+                  categoriesText: cats.value,
+                  group: group.checked,
+                  titles: titles.checked,
+                  air: Number(air.value) || COLLAGE_AIR.balanced
+                })
+            },
             t('ui_ai_continue')
           )
         )
@@ -407,7 +403,7 @@ export function applyOrganize(
   app: App,
   assignments: Record<ItemId, string>,
   order: string[],
-  opts: { group: boolean; titles: boolean }
+  opts: { group: boolean; titles: boolean; air?: number }
 ): void {
   const S = app.store;
   const items = S.scene.items.filter((i) => i.kind === 'image' && assignments[i.id]);
@@ -415,9 +411,12 @@ export function applyOrganize(
   const padding = S.scene.settings.alignPadding;
   const layout = layoutByCategory(items, clusters, {
     padding,
-    gap: Math.max(80, padding * 4),
+    // apenas una costura entre categorías: el tablero se lee como un collage
+    // continuo y el contexto aparece al tocar el grupo
+    gap: Math.max(24, padding * 3),
     titleHeight: opts.titles ? CATEGORY_TITLE_HEIGHT : 0,
-    aspect: app.viewAspect()
+    aspect: app.viewAspect(),
+    air: opts.air ?? appSettings.collageAir
   });
   if (!layout.clusters.length) return;
 
@@ -435,6 +434,8 @@ export function applyOrganize(
         if (p) {
           it.x = p.x;
           it.y = p.y;
+          // el collage iguala los anchos, así que trae escala propia
+          if (p.scale !== undefined && p.scale > 0) it.scale = p.scale;
         }
         const cat = assignments[it.id]!.toLowerCase();
         if (!it.tags.some((x) => x.toLowerCase() === cat)) it.tags = [...it.tags, cat];
@@ -483,14 +484,55 @@ export function applyOrganize(
 export function renderAiSettings(): HTMLElement {
   const keyInput = h('input', {
     type: 'password',
-    placeholder: appSettings.aiApiKey ? redactKey(appSettings.aiApiKey) : 'sk-ant-…',
+    placeholder: 'sk-ant-…',
+    // iOS ofrece contraseñas guardadas en cualquier campo de este tipo: con
+    // nombre propio y sin autocompletado deja de proponerlas.
+    name: 'anthropic-api-key',
     autocomplete: 'off',
-    autocapitalize: 'off'
+    autocapitalize: 'off',
+    autocorrect: 'off',
+    spellcheck: 'false',
+    'data-1p-ignore': 'true',
+    'data-lpignore': 'true'
   });
-  keyInput.addEventListener('change', () => {
-    void updateAppSettings({ aiApiKey: keyInput.value.trim() });
+  /** Estado actual: clave guardada (ofuscada) o aviso de que no hay. */
+  const keyState = h('div', { class: 'hint' });
+  const removeBtn = h('button', { class: 'btn small danger' }, t('ui_ai_key_remove'));
+  const syncKeyState = () => {
+    const saved = appSettings.aiApiKey;
+    keyState.textContent = saved ? t('ui_ai_key_saved', { key: redactKey(saved) }) : t('ui_ai_key_none');
+    removeBtn.style.display = saved ? '' : 'none';
+  };
+  syncKeyState();
+
+  /**
+   * Sólo se guarda una clave con forma válida. Nunca se escribe una cadena
+   * vacía: antes bastaba enfocar el campo y salir para perder la clave.
+   */
+  const saveKey = () => {
+    const value = keyInput.value.trim();
+    if (!value) return; // el campo vacío significa «no lo toques»
+    if (!isApiKeyLike(value)) {
+      toast(t('ui_ai_key_invalid'), { error: true });
+      return;
+    }
     keyInput.value = '';
-    keyInput.placeholder = appSettings.aiApiKey ? redactKey(appSettings.aiApiKey) : 'sk-ant-…';
+    void updateAppSettings({ aiApiKey: value }).then(() => {
+      syncKeyState();
+      toast(t('ui_ai_key_saved_ok'));
+    });
+  };
+  keyInput.addEventListener('change', saveKey);
+  keyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveKey();
+    }
+  });
+  removeBtn.addEventListener('click', async () => {
+    if (!(await confirmDialog(t('ui_ai_key_remove_confirm'), { danger: true }))) return;
+    await updateAppSettings({ aiApiKey: '' });
+    syncKeyState();
   });
 
   const price = h('div', { class: 'hint' }, modelPriceLabel(resolveModel()));
@@ -522,7 +564,8 @@ export function renderAiSettings(): HTMLElement {
     h('p', { class: 'hint' }, t('ui_ai_what_tag')),
     h('p', { class: 'hint' }, t('ui_ai_what_organize')),
     h('p', { class: 'hint' }, t('ui_ai_what_similar')),
-    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, h('div', { class: 'hint' }, t('ui_ai_key_hint'))),
+    h('p', { class: 'hint' }, t('ui_ai_billing_note')),
+    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, keyState, h('div', { class: 'hint' }, t('ui_ai_key_hint')), h('div', { class: 'row' }, removeBtn)),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), sel, price),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_usage')), usage, h('div', { class: 'row' }, resetBtn)),
     h('p', { class: 'hint' }, t('ui_ai_local_key'))
