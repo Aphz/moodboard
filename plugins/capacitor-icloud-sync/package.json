@@ -1,0 +1,34 @@
+{
+  "name": "capacitor-icloud-sync",
+  "version": "0.1.0",
+  "description": "Acceso al contenedor de iCloud Drive de Moodboard (iCloud.cl.nicopinto.moodboard) desde JS.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "dist",
+    "ios",
+    "Package.swift",
+    "CapacitorIcloudSync.podspec"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch"
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "icloud",
+    "ios"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^7.0.0"
+  }
+}

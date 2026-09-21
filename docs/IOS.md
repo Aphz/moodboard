@@ -94,6 +94,78 @@ estado), `@capacitor/keyboard` (ajustar el editor de notas cuando sube el teclad
 `@capacitor/app` (guardar al pasar a segundo plano; hoy ya se cubre con `visibilitychange`
 y `pagehide`).
 
+## iCloud
+
+La sincronización con **iCloud Drive** no usa `@capacitor/filesystem`: vive en un plugin
+local del repo, `plugins/capacitor-icloud-sync` (paquete `capacitor-icloud-sync`, enlazado
+desde `package.json` con `file:`). Expone a JS el *ubiquity container*
+`iCloud.cl.nicopinto.moodboard`, y trabaja siempre dentro de su carpeta `Documents/`, que
+es la que el usuario ve en **Archivos → iCloud Drive → Moodboard**.
+
+```bash
+npm install            # enlaza node_modules/capacitor-icloud-sync
+npx cap sync ios       # instala el pod/paquete SPM del plugin
+```
+
+```ts
+import { ICloudSync } from 'capacitor-icloud-sync';
+
+const status = await ICloudSync.isAvailable();
+// { available: false, reason: 'unsupported' }  → web / Android
+// { available: false, reason: 'no-account' }   → sin sesión de iCloud
+// { available: false, reason: 'no-container' } → falta el capability o iCloud Drive está apagado
+// { available: true, containerPath: '…/Documents' }
+
+await ICloudSync.writeText({ path: 'scenes/tablero.json', text });
+const { entries } = await ICloudSync.list({ dir: 'scenes' });
+await ICloudSync.startWatching();
+const sub = await ICloudSync.addListener('changed', ({ paths }) => { /* rutas relativas */ });
+```
+
+La API completa (`isAvailable`, `list`, `exists`, `readText`, `writeText`, `readFile`,
+`writeFile`, `remove`, `startWatching`, `stopWatching`, eventos `changed` y
+`availabilityChanged`) está documentada en
+[`plugins/capacitor-icloud-sync/README.md`](../plugins/capacitor-icloud-sync/README.md).
+Los archivos binarios viajan en base64; las rutas son relativas a `Documents/` y no pueden
+contener `..`. Las lecturas descargan el archivo si todavía está solo en la nube (espera
+hasta 60 s) y las escrituras son atómicas y coordinadas con `NSFileCoordinator`.
+
+### Qué hay que hacer en Xcode
+
+Sin estos dos pasos el plugin responde `{ available: false, reason: 'no-container' }` y la
+carpeta no aparece en Archivos.
+
+1. Target **App** → **Signing & Capabilities** → **+ Capability** → **iCloud**; marca
+   **iCloud Documents** y, en *Containers*, el contenedor **`iCloud.cl.nicopinto.moodboard`**
+   (créalo con **+** si no existe). El App ID en el portal de Apple Developer debe tener
+   iCloud habilitado con ese mismo contenedor. Xcode genera `App.entitlements` con
+   `com.apple.developer.ubiquity-container-identifiers`.
+2. En `ios/App/App/Info.plist`, la clave **`NSUbiquitousContainers`** — es la que hace
+   visible la carpeta en la app Archivos:
+
+   ```xml
+   <key>NSUbiquitousContainers</key>
+   <dict>
+     <key>iCloud.cl.nicopinto.moodboard</key>
+     <dict>
+       <key>NSUbiquitousContainerIsDocumentScopePublic</key>
+       <true/>
+       <key>NSUbiquitousContainerName</key>
+       <string>Moodboard</string>
+       <key>NSUbiquitousContainerSupportedFolderLevels</key>
+       <string>Any</string>
+     </dict>
+   </dict>
+   ```
+
+   Si cambias esta clave después de instalar, sube el número de *build* (iOS solo la vuelve
+   a leer con un build nuevo); en desarrollo puede hacer falta borrar la app y reinstalar.
+
+Para probarlo hace falta un dispositivo o simulador con sesión de iCloud iniciada y iCloud
+Drive encendido. Si tocas los `.ts` del plugin, recompila su `dist/` con
+`cd plugins/capacitor-icloud-sync && npm run build` (está versionado porque el app lo
+importa por `file:`).
+
 ## TestFlight
 
 1. En **App Store Connect**, crea la app con el bundle id `cl.nicopinto.moodboard`.
