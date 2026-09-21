@@ -366,7 +366,9 @@ export function applyOrganize(
   const padding = S.scene.settings.alignPadding;
   const layout = layoutByCategory(items, clusters, {
     padding,
-    gap: Math.max(80, padding * 4),
+    // apenas una costura entre categorías: el tablero se lee como un collage
+    // continuo y el contexto aparece al tocar el grupo
+    gap: Math.max(24, padding * 3),
     titleHeight: opts.titles ? CATEGORY_TITLE_HEIGHT : 0,
     aspect: app.viewAspect()
   });

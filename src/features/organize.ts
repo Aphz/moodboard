@@ -1,9 +1,9 @@
 /**
  * Disposición de un tablero por categorías, en collage de columnas verticales.
  *
- * Todas las imágenes pasan al mismo ancho de columna y se apilan en la columna
- * más corta (`masonryBoxes`), así que el tablero queda como un collage
- * continuo. Cada categoría ocupa un tramo de columnas contiguas, en proporción
+ * Las imágenes pasan al ancho de una columna —dos, si son apaisadas— y se
+ * apilan en la columna más corta (`masonryBoxes`), así que el tablero queda
+ * como un collage continuo con variedad de tamaños. Cada categoría ocupa un tramo de columnas contiguas, en proporción
  * a lo que abulta, y los tramos se ponen uno al lado del otro compartiendo el
  * borde superior.
  *
@@ -12,7 +12,7 @@
  * para que el llamador cree los grupos dentro de una sola transacción.
  */
 import { itemBounds, type Item, type ItemId, type Rect } from '../core/model';
-import { defaultColumnWidth, masonryBoxes, type Placement } from './arrange';
+import { columnSpan, defaultColumnWidth, masonryBoxes, type Placement } from './arrange';
 
 /** Una categoría con los ítems que le tocan. */
 export interface CategoryCluster {
@@ -122,11 +122,16 @@ export function layoutByCategory(items: Item[], clusters: CategoryCluster[], opt
   const colW = opts.columnWidth && opts.columnWidth > 0 ? opts.columnWidth : defaultColumnWidth(all);
   if (colW <= 0) return { placements: [], clusters: [] };
 
-  // 3. columnas totales para la proporción de la vista, repartidas por peso
+  // 3. columnas totales para la proporción de la vista, repartidas por peso.
+  //    El peso es el largo de columna que consume cada categoría: una imagen
+  //    apaisada ocupa dos columnas, así que cuenta doble.
   const heightOf = (members: Item[]) =>
     members.reduce((acc, it) => {
       const b = itemBounds(it);
-      return acc + (b.w > 0 ? b.h * (colW / b.w) : 0);
+      if (b.w <= 0) return acc;
+      const span = columnSpan(b, 2, true);
+      const w = span * colW + (span - 1) * padding;
+      return acc + b.h * (w / b.w) * span;
     }, 0);
   const weights = groups.map((g) => heightOf(g.members));
   const totalH = weights.reduce((a, b) => a + b, 0);
@@ -140,7 +145,7 @@ export function layoutByCategory(items: Item[], clusters: CategoryCluster[], opt
   let x = 0;
   groups.forEach((g, i) => {
     const columns = perGroup[i]!;
-    const { boxes, w, h } = masonryBoxes(g.members, { padding, columns, columnWidth: colW });
+    const { boxes, w, h } = masonryBoxes(g.members, { padding, columns, columnWidth: colW, spanWide: true });
     if (!boxes.length) return;
     const top = titleHeight;
     for (const b of boxes) {

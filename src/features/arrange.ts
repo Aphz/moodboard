@@ -205,7 +205,7 @@ export interface MasonryBox {
   top: number;
   w: number;
   h: number;
-  /** Escala absoluta que debe quedar en el ítem para ocupar el ancho de columna. */
+  /** Escala absoluta que debe quedar en el ítem para ocupar `w`. */
   scale: number;
 }
 
@@ -218,6 +218,22 @@ export interface MasonryOptions {
   columnWidth?: number;
   /** Proporción ancho/alto deseada, sólo para deducir `columns`. */
   aspect?: number;
+  /** Deja que las imágenes apaisadas ocupen dos columnas (collage con variedad). */
+  spanWide?: boolean;
+}
+
+/**
+ * Proporción ancho/alto a partir de la cual una imagen ocupa dos columnas.
+ *
+ * Una panorámica al ancho de una sola columna queda como una tira minúscula;
+ * a doble ancho recupera presencia sin volverse el ítem más alto del tablero.
+ */
+export const SPAN_ASPECT = 1.6;
+
+/** Columnas que ocupa una caja: dos si es apaisada y cabe, si no una. */
+export function columnSpan(b: Rect, columns: number, spanWide = false): number {
+  if (!spanWide || columns < 2 || b.w <= 0 || b.h <= 0) return 1;
+  return b.w / b.h >= SPAN_ASPECT ? 2 : 1;
 }
 
 /** Ancho de columna por defecto: la mediana de los anchos actuales. */
@@ -244,11 +260,50 @@ function columnsFor(items: Item[], colW: number, aspect: number): number {
   return Math.max(1, Math.min(items.length, Math.round(n) || 1));
 }
 
+/** Borde superior libre de `span` columnas consecutivas desde `from`. */
+function topOf(heights: number[], from: number, span: number): number {
+  let top = 0;
+  for (let i = from; i < from + span; i++) top = Math.max(top, heights[i] ?? 0);
+  return top;
+}
+
+/** Hueco muerto que deja apoyar `span` columnas desde `from` en `top`. */
+function waste(heights: number[], from: number, span: number, top: number): number {
+  let sum = 0;
+  for (let i = from; i < from + span; i++) sum += top - (heights[i] ?? 0);
+  return sum / 2;
+}
+
 /**
- * Empaquetado en columnas tipo collage («masonry»): todas las imágenes pasan
- * al mismo ancho y cada una se apila en la columna más corta, así que las
- * columnas quedan parejas de alto y sin huecos. Devuelve las cajas en
- * coordenadas locales (origen arriba a la izquierda) para que quien llame
+ * Hueco de una columna que dejó abierto una imagen a doble ancho: la columna
+ * corta del par queda con un vacío entre donde llegaba y donde arranca la
+ * imagen ancha. Las siguientes imágenes angostas lo rellenan.
+ */
+interface Gap {
+  col: number;
+  top: number;
+  h: number;
+}
+
+/**
+ * Hueco más alto donde quepa algo de `need` de alto, o -1. Sólo sirve si está
+ * por encima de `top`, que es donde iría la imagen si no se rellenara nada.
+ */
+function bestGap(gaps: Gap[], need: number, top: number): number {
+  let best = -1;
+  for (let i = 0; i < gaps.length; i++) {
+    const g = gaps[i]!;
+    if (g.h < need || g.top >= top) continue;
+    if (best < 0 || g.top < gaps[best]!.top) best = i;
+  }
+  return best;
+}
+
+/**
+ * Empaquetado en columnas tipo collage («masonry»): cada imagen pasa al ancho
+ * de una columna —o de dos, si es apaisada y `spanWide` está activo— y se
+ * apila donde el collage llega menos abajo, así que las columnas quedan
+ * parejas de alto y sin huecos. Devuelve las cajas en coordenadas locales (origen arriba a la izquierda) para que quien llame
  * pueda desplazarlas; `arrangeMasonry` es la versión que trabaja sobre la
  * escena.
  *
@@ -261,24 +316,56 @@ export function masonryBoxes(items: Item[], opts: MasonryOptions): { boxes: Maso
   const columns = Math.max(1, Math.round(opts.columns ?? columnsFor(items, colW, opts.aspect ?? 1)));
 
   const heights = new Array<number>(columns).fill(0);
+  const gaps: Gap[] = [];
   const boxes: MasonryBox[] = [];
   for (const it of items) {
     const b = itemBounds(it);
     if (b.w <= 0 || b.h <= 0) continue;
-    // columna más corta; ante empate, la de más a la izquierda
+    const span = columnSpan(b, columns, opts.spanWide);
+    // sitio donde el collage llega menos abajo: la columna (o el par de
+    // columnas) más corta; ante empate, la de más a la izquierda
     let k = 0;
-    for (let i = 1; i < columns; i++) if (heights[i]! < heights[k]!) k = i;
-    const factor = colW / b.w;
+    let top = topOf(heights, 0, span);
+    let best = top + waste(heights, 0, span, top);
+    for (let i = 1; i + span <= columns; i++) {
+      const candTop = topOf(heights, i, span);
+      // el hueco que deja una imagen a doble ancho cuenta como medio: entre
+      // dos sitios igual de altos gana el que desperdicia menos
+      const score = candTop + waste(heights, i, span, candTop);
+      if (score < best) {
+        best = score;
+        top = candTop;
+        k = i;
+      }
+    }
+    const w = span * colW + (span - 1) * padding;
+    const factor = w / b.w;
     const h = b.h * factor;
+
+    // si cabe más arriba en un hueco abierto, va ahí: es lo que deja el
+    // collage sin claros en medio
+    const gi = span === 1 ? bestGap(gaps, h + padding, top) : -1;
+    if (gi >= 0) {
+      const g = gaps[gi]!;
+      boxes.push({ id: it.id, left: g.col * (colW + padding), top: g.top, w, h, scale: (it.scale || 1) * factor });
+      const rest = g.h - (h + padding);
+      if (rest > 0) gaps[gi] = { col: g.col, top: g.top + h + padding, h: rest };
+      else gaps.splice(gi, 1);
+      continue;
+    }
+
     boxes.push({
       id: it.id,
       left: k * (colW + padding),
-      top: heights[k]!,
-      w: colW,
+      top,
+      w,
       h,
       scale: (it.scale || 1) * factor
     });
-    heights[k] = heights[k]! + h + padding;
+    for (let i = k; i < k + span; i++) {
+      if (top > heights[i]!) gaps.push({ col: i, top: heights[i]!, h: top - heights[i]! });
+      heights[i] = top + h + padding;
+    }
   }
   const tallest = heights.reduce((m, v) => Math.max(m, v), 0);
   return {
@@ -289,10 +376,14 @@ export function masonryBoxes(items: Item[], opts: MasonryOptions): { boxes: Maso
 }
 
 /**
- * Collage en columnas verticales sobre la escena: mismas anchuras, alturas
- * libres y sin huecos. El conjunto queda centrado donde estaba.
+ * Collage en columnas verticales sobre la escena: anchos de una o dos
+ * columnas, alturas libres y sin huecos. El conjunto queda centrado donde
+ * estaba.
  */
-export function arrangeMasonry(items: Item[], opts: ArrangeOptions & { columns?: number; columnWidth?: number }): Placement[] {
+export function arrangeMasonry(
+  items: Item[],
+  opts: ArrangeOptions & { columns?: number; columnWidth?: number; spanWide?: boolean }
+): Placement[] {
   const list = boxed(items);
   const u = currentUnion(list);
   if (!u) return [];
@@ -301,7 +392,8 @@ export function arrangeMasonry(items: Item[], opts: ArrangeOptions & { columns?:
     padding: opts.padding,
     aspect: opts.aspect,
     columns: opts.columns,
-    columnWidth: opts.columnWidth
+    columnWidth: opts.columnWidth,
+    spanWide: opts.spanWide
   });
   if (!boxes.length) return [];
   const dx = target.x - w / 2;

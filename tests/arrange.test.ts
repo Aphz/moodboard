@@ -15,6 +15,7 @@ import {
 import {
   arrangeOptimal,
   arrangeMasonry,
+  columnSpan,
   arrangeGrid,
   arrangeRow,
   arrangeColumn,
@@ -344,5 +345,27 @@ describe('arrangeMasonry', () => {
 
   it('sin ítems devuelve una lista vacía', () => {
     expect(arrangeMasonry([], { padding: 10, aspect: 1 })).toEqual([]);
+  });
+
+  it('con spanWide las apaisadas ocupan dos columnas y el resto una', () => {
+    const pl = arrangeMasonry(items, { padding: 10, aspect: 1.5, columns: 3, columnWidth: 200, spanWide: true });
+    const anchoDe = (id: ItemId) => boxOf(byId.get(id)!, pl.find((p) => p.id === id)!).w;
+    expect(anchoDe('b')).toBeCloseTo(410, 6); // 400x200: dos columnas + hueco
+    expect(anchoDe('e')).toBeCloseTo(410, 6); // 200x100
+    expect(anchoDe('a')).toBeCloseTo(200, 6); // 200x300: una columna
+    expect(anchoDe('d')).toBeCloseTo(200, 6);
+    // y siguen sin solaparse
+    const boxes = pl.map((p) => boxOf(byId.get(p.id)!, p));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) expect(rectsIntersect(boxes[i]!, boxes[j]!)).toBe(false);
+    }
+  });
+
+  it('columnSpan sólo dobla cuando hay columnas de sobra y la caja es apaisada', () => {
+    expect(columnSpan({ x: 0, y: 0, w: 400, h: 200 }, 3, true)).toBe(2);
+    expect(columnSpan({ x: 0, y: 0, w: 400, h: 200 }, 1, true)).toBe(1);
+    expect(columnSpan({ x: 0, y: 0, w: 400, h: 200 }, 3, false)).toBe(1);
+    expect(columnSpan({ x: 0, y: 0, w: 300, h: 200 }, 3, true)).toBe(1); // 1,5 no alcanza
+    expect(columnSpan({ x: 0, y: 0, w: 0, h: 0 }, 3, true)).toBe(1);
   });
 });

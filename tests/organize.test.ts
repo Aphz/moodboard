@@ -1,7 +1,8 @@
 /**
  * Pruebas de la disposición por categorías (src/features/organize.ts): cada
- * categoría queda como un bloque compacto, los bloques no se solapan, todos
- * los ítems reciben posición y el hueco del título queda sobre cada bloque.
+ * categoría queda como un bloque compacto de columnas (con las apaisadas a
+ * doble ancho), los bloques no se solapan, todos los ítems reciben posición y
+ * el hueco del título queda sobre cada bloque.
  */
 import { describe, expect, it } from 'vitest';
 import { createImageItem, itemBounds, unionRects, type ImageItem, type Rect } from '../src/core/model';
@@ -39,10 +40,12 @@ describe('layoutByCategory', () => {
   const byId = new Map(items.map((i) => [i.id, i]));
   const placementOf = (out: ReturnType<typeof layoutByCategory>, id: string) => out.placements.find((p) => p.id === id)!;
 
-  it('deja los bloques de alto parejo: ninguno pasa de 1,4 veces el más bajo', () => {
+  it('deja los bloques de alto parejo: ninguno pasa de 1,5 veces el más bajo', () => {
     const out = layoutByCategory(items, clusters, OPTS);
     const alturas = out.clusters.map((c) => c.content.h);
-    expect(Math.max(...alturas)).toBeLessThanOrEqual(Math.min(...alturas) * 1.4);
+    // el reparto de columnas trabaja con estimaciones, y una imagen a doble
+    // ancho mueve el bloque de golpe, así que la tolerancia no puede ser fina
+    expect(Math.max(...alturas)).toBeLessThanOrEqual(Math.min(...alturas) * 1.5);
   });
 
   it('coloca todos los ítems y descarta las categorías vacías o sin ítems conocidos', () => {
@@ -51,10 +54,18 @@ describe('layoutByCategory', () => {
     expect(out.clusters.map((c) => c.title)).toEqual(['Poses', 'Texturas']);
   });
 
-  it('iguala el ancho de todas las imágenes: eso es lo que da el aire de collage', () => {
+  it('lleva cada imagen a una columna, o a dos si es apaisada', () => {
     const out = layoutByCategory(items, clusters, OPTS);
-    const widths = out.placements.map((p) => boxOf(byId.get(p.id)!, p).w);
-    for (const w of widths) expect(w).toBeCloseTo(widths[0]!, 6);
+    const anchos = new Map(out.placements.map((p) => [p.id, boxOf(byId.get(p.id)!, p).w]));
+    // la columna es el ancho más chico del tablero; el doble ancho suma el hueco
+    const colW = Math.min(...anchos.values());
+    const dobleW = 2 * colW + OPTS.padding;
+    for (const [id, w] of anchos) {
+      const it = byId.get(id)!;
+      expect(w).toBeCloseTo(it.w / it.h >= 1.6 ? dobleW : colW, 6);
+    }
+    // 'd' (400x200) es la única apaisada de verdad: va a doble ancho
+    expect(anchos.get('d')).toBeCloseTo(dobleW, 6);
     // y cada una conserva su proporción
     for (const p of out.placements) {
       const it = byId.get(p.id)!;

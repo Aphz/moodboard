@@ -78,9 +78,11 @@ configurada en Ajustes). Un único diálogo con todo:
   falta un rótulo permanente si vas a exportar el tablero como imagen.
 - **Modelo**: Haiku 4.5 por defecto (el más económico), Sonnet 5 u Opus 5.
 
-Resultado: un collage de columnas verticales. Todas las imágenes quedan al
-mismo ancho y se apilan en la columna más corta, cada categoría ocupa una
-franja de columnas contiguas y los bloques salen de alto parejo. Cada imagen
+Resultado: un collage de columnas verticales. Cada imagen toma el ancho de una
+columna —dos, si es apaisada— y se apila donde el collage llega menos abajo,
+rellenando los claros que dejan las anchas; cada categoría ocupa una franja de
+columnas contiguas, separada apenas por una costura, y los bloques salen de
+alto parejo. Cada imagen
 recibe además la categoría como etiqueta, y todo el cambio es un único paso de
 deshacer. Desde ahí se mueve y se ajusta a mano lo que quieras: el mismo
 collage está en el menú de organizar como **Organizar: collage en columnas**.
