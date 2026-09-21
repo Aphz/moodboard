@@ -29,11 +29,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-        env:
-          # ID de cliente OAuth de Google (público). Se define en Settings → Secrets and variables → Actions → Variables,
-          # o se deja fijo en un archivo .env versionado.
-          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+      - run: npm run build  # VITE_GOOGLE_CLIENT_ID viene del archivo .env versionado
       - uses: actions/configure-pages@v5
         with:
           enablement: true
