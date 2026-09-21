@@ -48,6 +48,8 @@ export interface ItemBase extends Transform {
   comment: string;
   tags: string[];
   createdAt: number;
+  /** última modificación (ms). Lo usa la sincronización para fusionar cambios entre dispositivos. */
+  mtime?: number;
 }
 
 export interface ImageItem extends ItemBase {
@@ -132,6 +134,8 @@ export interface Scene {
   settings: SceneSettings;
   createdAt: number;
   updatedAt: number;
+  /** ítems borrados: id → momento del borrado (ms). Permite propagar borrados al sincronizar. */
+  tombstones?: Record<ItemId, number>;
 }
 
 export interface Rect {
@@ -173,7 +177,8 @@ export function createScene(name = 'Sin título'): Scene {
     viewport: { x: 0, y: 0, zoom: 1 },
     settings: defaultSettings(),
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    tombstones: {}
   };
 }
 
@@ -190,6 +195,7 @@ function baseItem(kind: ItemKind, name: string, t: Partial<Transform> = {}): Ite
     comment: '',
     tags: [],
     createdAt: Date.now(),
+    mtime: Date.now(),
     x: 0,
     y: 0,
     w: 100,
@@ -378,6 +384,18 @@ export function paintOrder(scene: Scene): Item[] {
   };
   visit(null);
   return out;
+}
+
+/**
+ * Orden de renderizado: primero imágenes (y grupos), después notas y dibujos,
+ * cada bloque en orden de pintado. Así las anotaciones nunca quedan tapadas
+ * por una imagen hermana, igual que en PureRef.
+ */
+export function renderOrder(scene: Scene): Item[] {
+  const order = paintOrder(scene);
+  const base = order.filter((i) => i.kind === 'image' || i.kind === 'group');
+  const overlay = order.filter((i) => i.kind === 'note' || i.kind === 'drawing');
+  return [...base, ...overlay];
 }
 
 /** Caja que contiene un ítem y todos sus descendientes visibles. */

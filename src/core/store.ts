@@ -84,7 +84,18 @@ export class Store {
   }
 
   private restore(s: Snapshot) {
-    this.scene.items = s.items.map((i) => structuredClone(i));
+    // marcar como modificados los ítems que cambian respecto al estado actual
+    // (deshacer/rehacer también debe propagarse al sincronizar)
+    const now = Date.now();
+    const current = new Map(this.scene.items.map((i) => [i.id, JSON.stringify({ ...i, mtime: 0 })]));
+    const restored = s.items.map((i) => {
+      const c = structuredClone(i);
+      if (current.get(c.id) !== JSON.stringify({ ...c, mtime: 0 })) c.mtime = now;
+      return c;
+    });
+    const restoredIds = new Set(restored.map((i) => i.id));
+    for (const id of current.keys()) if (!restoredIds.has(id)) this.tombstone(id, now);
+    this.scene.items = restored;
     this.scene.settings = structuredClone(s.settings);
     const alive = new Set(this.scene.items.map((i) => i.id));
     for (const id of [...this.selection]) if (!alive.has(id)) this.selection.delete(id);
@@ -166,8 +177,15 @@ export class Store {
     return findItem(this.scene, id);
   }
 
+  private tombstone(id: ItemId, at = Date.now()) {
+    if (!this.scene.tombstones) this.scene.tombstones = {};
+    this.scene.tombstones[id] = at;
+  }
+
   addItem(item: Item): Item {
     if (item.z === 0) item.z = nextZ(this.scene, item.parentId);
+    item.mtime = Date.now();
+    if (this.scene.tombstones) delete this.scene.tombstones[item.id];
     this.scene.items.push(item);
     this.touch();
     this.emit({ type: 'scene' });
@@ -177,9 +195,13 @@ export class Store {
   /** Muta ítems in situ y notifica. Usar dentro de `commit`. */
   update(ids: ItemId | ItemId[], fn: (it: Item) => void) {
     const list = Array.isArray(ids) ? ids : [ids];
+    const now = Date.now();
     for (const id of list) {
       const it = this.get(id);
-      if (it) fn(it);
+      if (it) {
+        fn(it);
+        it.mtime = now;
+      }
     }
     this.touch();
     this.emit({ type: 'items', ids: list });
@@ -192,7 +214,11 @@ export class Store {
       for (const d of descendantsOf(this.scene, id)) toRemove.add(d.id);
     }
     this.scene.items = this.scene.items.filter((i) => !toRemove.has(i.id));
-    for (const id of toRemove) this.selection.delete(id);
+    const now = Date.now();
+    for (const id of toRemove) {
+      this.selection.delete(id);
+      this.tombstone(id, now);
+    }
     this.touch();
     this.emit({ type: 'scene' });
     this.emit({ type: 'selection' });
@@ -216,6 +242,7 @@ export class Store {
       if (cyclic) continue;
       it.parentId = parentId;
       it.z = nextZ(this.scene, parentId);
+      it.mtime = Date.now();
     }
     this.touch();
     this.emit({ type: 'scene' });
@@ -224,7 +251,10 @@ export class Store {
   bringToFront(ids: ItemId[]) {
     for (const id of ids) {
       const it = this.get(id);
-      if (it) it.z = nextZ(this.scene, it.parentId);
+      if (it) {
+        it.z = nextZ(this.scene, it.parentId);
+        it.mtime = Date.now();
+      }
     }
     this.touch();
     this.emit({ type: 'scene' });
@@ -237,6 +267,7 @@ export class Store {
       let minZ = Infinity;
       for (const s of this.scene.items) if (s.parentId === it.parentId) minZ = Math.min(minZ, s.z);
       it.z = (Number.isFinite(minZ) ? minZ : 0) - 1;
+      it.mtime = Date.now();
     }
     this.touch();
     this.emit({ type: 'scene' });
@@ -292,6 +323,23 @@ export class Store {
     fn(this.scene.settings);
     this.touch();
     this.emit({ type: 'settings' });
+  }
+
+  /**
+   * Reemplaza la escena abierta por una versión fusionada (sincronización)
+   * sin perder selección ni historial. No marca la escena como sucia.
+   */
+  applyRemote(scene: Scene) {
+    if (scene.id !== this.scene.id) return;
+    this.scene.items = scene.items;
+    this.scene.settings = scene.settings;
+    this.scene.name = scene.name;
+    this.scene.tombstones = scene.tombstones ?? {};
+    this.scene.updatedAt = scene.updatedAt;
+    const alive = new Set(this.scene.items.map((i) => i.id));
+    for (const id of [...this.selection]) if (!alive.has(id)) this.selection.delete(id);
+    this.emit({ type: 'scene' });
+    this.emit({ type: 'selection' });
   }
 }
 

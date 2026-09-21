@@ -9,7 +9,7 @@ import {
   descendantsOf,
   effectiveSize,
   itemBounds,
-  paintOrder,
+  renderOrder,
   subtreeBounds,
   unionRects,
   type DrawingItem,
@@ -48,6 +48,8 @@ export interface Overlay {
   liveStroke: { stroke: Stroke; origin: Point } | null;
   /** ocultar gizmo durante transformaciones */
   hideGizmo: boolean;
+  /** el usuario está moviendo/zoomeando el lienzo: dibujar en calidad ligera */
+  interacting: boolean;
 }
 
 export function sceneToScreen(v: Viewport, p: Point): Point {
@@ -63,8 +65,14 @@ export class Renderer {
   width = 0;
   height = 0;
   dpr = 1;
-  overlay: Overlay = { lasso: null, hoverId: null, cropId: null, liveStroke: null, hideGizmo: false };
+  overlay: Overlay = { lasso: null, hoverId: null, cropId: null, liveStroke: null, hideGizmo: false, interacting: false };
   private raf = 0;
+  /** sombras suaves bajo los ítems (se apagan durante pan/zoom y en escenas muy grandes) */
+  private shadows = true;
+  /** true mientras se renderiza para exportar (sin sombras ni decoraciones) */
+  exporting = false;
+  private dotPattern: { key: string; pattern: CanvasPattern | null } | null = null;
+  private vignette: { key: string; grad: CanvasGradient } | null = null;
   private noteLayoutCache = new Map<string, { key: string; lines: TextLine[]; height: number }>();
 
   constructor(public canvas: HTMLCanvasElement, public store: Store) {
@@ -102,6 +110,8 @@ export class Renderer {
     if (scene.settings.canvasColor !== 'transparent') {
       ctx.fillStyle = scene.settings.canvasColor;
       ctx.fillRect(0, 0, this.width, this.height);
+      this.drawDots(scene);
+      this.drawVignette();
     }
     if (scene.settings.grid.enabled) this.drawGrid(scene);
 
@@ -109,13 +119,17 @@ export class Renderer {
     const hiddenSubtrees = new Set<string>();
     for (const it of scene.items) if (!it.visible) for (const d of descendantsOf(scene, it.id)) hiddenSubtrees.add(d.id);
 
+    const visibleItems = renderOrder(scene).filter((it) => {
+      if (!it.visible || hiddenSubtrees.has(it.id) || it.kind === 'group') return false;
+      const b = itemBounds(it);
+      return !(b.x + b.w < visible.x || b.x > visible.x + visible.w || b.y + b.h < visible.y || b.y > visible.y + visible.h);
+    });
+    this.shadows = !this.overlay.interacting && visibleItems.length <= 120;
+
     ctx.save();
     ctx.translate(v.x, v.y);
     ctx.scale(v.zoom, v.zoom);
-    for (const it of paintOrder(scene)) {
-      if (!it.visible || hiddenSubtrees.has(it.id) || it.kind === 'group') continue;
-      const b = itemBounds(it);
-      if (b.x + b.w < visible.x || b.x > visible.x + visible.w || b.y + b.h < visible.y || b.y > visible.y + visible.h) continue;
+    for (const it of visibleItems) {
       this.drawItem(ctx, it, v.zoom);
     }
     if (this.overlay.liveStroke) {
@@ -148,6 +162,53 @@ export class Renderer {
       ctx.strokeRect(l.x, l.y, l.w, l.h);
     }
     if (this.overlay.cropId) this.drawCropOverlay(scene);
+  }
+
+  /** Trama de puntos muy sutil que da sensación de profundidad y de "mesa" infinita. */
+  private drawDots(scene: Scene) {
+    const { ctx } = this;
+    const v = scene.viewport;
+    let spacing = 48 * v.zoom;
+    while (spacing < 24) spacing *= 2;
+    while (spacing > 96) spacing /= 2;
+    const light = isLightColor(scene.settings.canvasColor);
+    const key = `${spacing.toFixed(2)}|${light}|${this.dpr}`;
+    if (!this.dotPattern || this.dotPattern.key !== key) {
+      const c = document.createElement('canvas');
+      const size = Math.max(1, Math.round(spacing * this.dpr));
+      c.width = size;
+      c.height = size;
+      const g = c.getContext('2d')!;
+      g.fillStyle = light ? 'rgba(0,0,0,0.11)' : 'rgba(255,255,255,0.075)';
+      g.beginPath();
+      g.arc(size / 2, size / 2, Math.max(1, 1.1 * this.dpr), 0, Math.PI * 2);
+      g.fill();
+      const pattern = ctx.createPattern(c, 'repeat');
+      if (pattern && 'setTransform' in pattern) pattern.setTransform(new DOMMatrix().scale(1 / this.dpr));
+      this.dotPattern = { key, pattern };
+    }
+    if (!this.dotPattern.pattern) return;
+    ctx.save();
+    ctx.translate(((v.x % spacing) + spacing) % spacing, ((v.y % spacing) + spacing) % spacing);
+    ctx.fillStyle = this.dotPattern.pattern;
+    ctx.fillRect(-spacing, -spacing, this.width + spacing * 2, this.height + spacing * 2);
+    ctx.restore();
+  }
+
+  /** Viñeta radial: aclara el centro y oscurece los bordes, como una superficie iluminada. */
+  private drawVignette() {
+    const { ctx } = this;
+    const key = `${this.width}x${this.height}`;
+    if (!this.vignette || this.vignette.key !== key) {
+      const r = Math.hypot(this.width, this.height) * 0.6;
+      const grad = ctx.createRadialGradient(this.width / 2, this.height * 0.42, r * 0.15, this.width / 2, this.height * 0.42, r);
+      grad.addColorStop(0, 'rgba(255,255,255,0.035)');
+      grad.addColorStop(0.55, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.28)');
+      this.vignette = { key, grad };
+    }
+    ctx.fillStyle = this.vignette.grad;
+    ctx.fillRect(0, 0, this.width, this.height);
   }
 
   drawGrid(scene: Scene) {
@@ -208,10 +269,18 @@ export class Renderer {
     if (bmp) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = zoom * it.scale < 0.5 ? 'medium' : 'high';
+      this.applyShadow(ctx, 'strong');
       try {
         ctx.drawImage(bmp, sx, sy, Math.max(1, sw), Math.max(1, sh), -w / 2, -h / 2, w, h);
       } catch {
         /* bitmap cerrado */
+      }
+      this.clearShadow(ctx);
+      // borde interior muy sutil: separa la imagen del fondo como una lámina impresa
+      if (!this.exporting) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+        ctx.lineWidth = 1 / (zoom * it.scale);
+        ctx.strokeRect(-w / 2 + ctx.lineWidth / 2, -h / 2 + ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth);
       }
     } else {
       ctx.fillStyle = isFailed(it.blobId) ? '#5a2a2a' : '#333';
@@ -260,8 +329,21 @@ export class Renderer {
     ctx.beginPath();
     roundRect(ctx, -it.w / 2, -it.h / 2, it.w, it.h, r);
     if (it.background && it.background !== 'transparent') {
+      this.applyShadow(ctx, 'soft');
       ctx.fillStyle = it.background;
       ctx.fill();
+      this.clearShadow(ctx);
+      if (!this.exporting) {
+        // brillo superior tipo tarjeta
+        const g = ctx.createLinearGradient(0, -it.h / 2, 0, it.h / 2);
+        g.addColorStop(0, 'rgba(255,255,255,0.10)');
+        g.addColorStop(0.5, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
     }
     ctx.save();
     ctx.clip();
@@ -303,6 +385,22 @@ export class Renderer {
 
   private drawDrawing(ctx: CanvasRenderingContext2D, it: DrawingItem) {
     for (const s of it.strokes) drawStroke(ctx, s, 1);
+  }
+
+  /** Sombra proyectada (en píxeles de pantalla: no la afecta la transformación). */
+  private applyShadow(ctx: CanvasRenderingContext2D, kind: 'strong' | 'soft') {
+    if (!this.shadows || this.exporting) return;
+    ctx.shadowColor = kind === 'strong' ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = kind === 'strong' ? 22 : 14;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = kind === 'strong' ? 8 : 4;
+  }
+
+  private clearShadow(ctx: CanvasRenderingContext2D) {
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
   }
 
   // ---------------------------------------------------------------------
@@ -373,6 +471,10 @@ export class Renderer {
       }
       ctx.strokeStyle = it.locked ? '#999' : '#0a84ff';
       ctx.lineWidth = 1.5;
+      if (!it.locked) {
+        ctx.shadowColor = 'rgba(10,132,255,0.55)';
+        ctx.shadowBlur = 10;
+      }
       ctx.strokeRect(-sw / 2, -sh / 2, sw, sh);
       ctx.restore();
     }
@@ -392,6 +494,10 @@ export class Renderer {
       ctx.lineTo(rot.x, rot.y);
       ctx.stroke();
     }
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.45)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
     for (const h of hs) {
       ctx.beginPath();
       if (h.id === 'rotate') ctx.arc(h.x, h.y, HANDLE_SIZE / 2, 0, Math.PI * 2);
@@ -402,6 +508,7 @@ export class Renderer {
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
+    ctx.restore();
   }
 
   /** Tiradores del recorte en pantalla (esquinas + bordes) para el ítem en crop. */
@@ -518,6 +625,14 @@ export class Renderer {
 
 // -------------------------------------------------------------------------
 // utilidades de dibujo
+
+function isLightColor(hex: string): boolean {
+  const m = /^#([0-9a-f]{6})/i.exec(hex);
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140;
+}
 
 export function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   r = Math.min(r, w / 2, h / 2);
@@ -641,10 +756,15 @@ export function renderToCanvas(
   }
   ctx.scale(scale, scale);
   ctx.translate(-bounds.x + margin, -bounds.y + margin);
-  const order = paintOrder(renderer.store.scene).filter((i) => items.includes(i));
-  for (const it of order) {
-    if (!it.visible || it.kind === 'group') continue;
-    renderer.drawItem(ctx, it, scale);
+  const order = renderOrder(renderer.store.scene).filter((i) => items.includes(i));
+  renderer.exporting = true;
+  try {
+    for (const it of order) {
+      if (!it.visible || it.kind === 'group') continue;
+      renderer.drawItem(ctx, it, scale);
+    }
+  } finally {
+    renderer.exporting = false;
   }
   return canvas;
 }
