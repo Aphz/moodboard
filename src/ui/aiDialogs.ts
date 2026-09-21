@@ -32,7 +32,7 @@ import {
   modelLabel,
   modelPriceLabel
 } from '../ai/pricing';
-import { appSettings, updateAppSettings } from '../core/settings';
+import { COLLAGE_AIR, appSettings, updateAppSettings } from '../core/settings';
 import { ensureBitmaps, getBitmap } from '../render/imageCache';
 
 /** Calidad JPEG de las miniaturas que se envían (baja a propósito: menos tokens). */
@@ -66,6 +66,19 @@ async function thumbBase64(
   const url = c.toDataURL('image/jpeg', THUMB_QUALITY);
   const data = url.split(',')[1] ?? null;
   return data ? { data, w: c.width, h: c.height } : null;
+}
+
+/**
+ * Miniaturas muy pequeñas (192 px) para leer el mood del tablero cuando no hay
+ * etiquetas: bastan para el ambiente y cuestan unos 50 tokens cada una.
+ */
+export async function moodThumbs(images: ImageItem[], max = 6): Promise<{ jpegBase64: string }[]> {
+  const out: { jpegBase64: string }[] = [];
+  for (const img of images.slice(0, max)) {
+    const th = await thumbBase64(img, 192);
+    if (th) out.push({ jpegBase64: th.data });
+  }
+  return out;
 }
 
 function requireKey(): boolean {
@@ -261,7 +274,7 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
 
   const choice = await organizeOptionsDialog(pool.length);
   if (!choice) return;
-  void updateAppSettings({ aiCategories: choice.categoriesText, aiCategoriesAdHoc: choice.adHoc });
+  void updateAppSettings({ aiCategories: choice.categoriesText, aiCategoriesAdHoc: choice.adHoc, collageAir: choice.air });
   const categories = choice.adHoc ? [] : parseCategories(choice.categoriesText);
   if (!choice.adHoc && !categories.length) {
     toast(t('ui_org_no_categories'), { error: true });
@@ -286,7 +299,7 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
   try {
     const { result, usage } = await classifyImages({ images, categories, lang: getLanguage() });
     tt.close();
-    applyOrganize(app, result.assignments, result.categories, { group: choice.group, titles: choice.titles });
+    applyOrganize(app, result.assignments, result.categories, { group: choice.group, titles: choice.titles, air: choice.air });
     reportUsage(usage, calls, t('ui_org_done', { categories: result.categories.length }));
   } catch (e) {
     tt.close();
@@ -294,11 +307,21 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
   }
 }
 
-/** Opciones del diálogo de organizar: modo, categorías, grupos y títulos. */
-function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categoriesText: string; group: boolean; titles: boolean } | null> {
+/** Opciones del diálogo de organizar. */
+interface OrganizeChoice {
+  adHoc: boolean;
+  categoriesText: string;
+  group: boolean;
+  titles: boolean;
+  /** Aire entre imágenes, como fracción del ancho de columna. */
+  air: number;
+}
+
+/** Opciones del diálogo de organizar: modo, categorías, grupos, títulos y aire. */
+function organizeOptionsDialog(count: number): Promise<OrganizeChoice | null> {
   return new Promise((resolve) => {
     let done = false;
-    const fin = (v: { adHoc: boolean; categoriesText: string; group: boolean; titles: boolean } | null) => {
+    const fin = (v: OrganizeChoice | null) => {
       if (done) return;
       done = true;
       d.close();
@@ -312,6 +335,17 @@ function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categor
     // un rótulo fijo sólo hace falta para que salga en la exportación
     const titles = h('input', { type: 'checkbox' });
     const model = modelSelect(() => undefined);
+    const air = h(
+      'select',
+      null,
+      ...([
+        ['dense', COLLAGE_AIR.dense],
+        ['balanced', COLLAGE_AIR.balanced],
+        ['wide', COLLAGE_AIR.wide]
+      ] as const).map(([id, v]) =>
+        h('option', { value: String(v), selected: appSettings.collageAir === v || undefined }, t(`ui_org_air_${id}`))
+      )
+    );
     const syncCats = () => {
       cats.disabled = adHoc.checked;
       cats.style.opacity = adHoc.checked ? '0.5' : '';
@@ -332,6 +366,7 @@ function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categor
         h('div', { class: 'field' }, cats, h('div', { class: 'hint' }, t('ui_org_categories_hint'))),
         h('label', { class: 'row' }, group, h('span', null, t('ui_org_group'))),
         h('label', { class: 'row' }, titles, h('span', null, t('ui_org_titles'))),
+        h('div', { class: 'field' }, h('label', null, t('ui_org_air')), air, h('div', { class: 'hint' }, t('ui_org_air_hint'))),
         h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), model),
         h(
           'div',
@@ -339,7 +374,17 @@ function organizeOptionsDialog(count: number): Promise<{ adHoc: boolean; categor
           h('button', { class: 'btn', onclick: () => fin(null) }, t('ui_cancel')),
           h(
             'button',
-            { class: 'btn primary', onclick: () => fin({ adHoc: adHoc.checked, categoriesText: cats.value, group: group.checked, titles: titles.checked }) },
+            {
+              class: 'btn primary',
+              onclick: () =>
+                fin({
+                  adHoc: adHoc.checked,
+                  categoriesText: cats.value,
+                  group: group.checked,
+                  titles: titles.checked,
+                  air: Number(air.value) || COLLAGE_AIR.balanced
+                })
+            },
             t('ui_ai_continue')
           )
         )
@@ -358,7 +403,7 @@ export function applyOrganize(
   app: App,
   assignments: Record<ItemId, string>,
   order: string[],
-  opts: { group: boolean; titles: boolean }
+  opts: { group: boolean; titles: boolean; air?: number }
 ): void {
   const S = app.store;
   const items = S.scene.items.filter((i) => i.kind === 'image' && assignments[i.id]);
@@ -370,7 +415,8 @@ export function applyOrganize(
     // continuo y el contexto aparece al tocar el grupo
     gap: Math.max(24, padding * 3),
     titleHeight: opts.titles ? CATEGORY_TITLE_HEIGHT : 0,
-    aspect: app.viewAspect()
+    aspect: app.viewAspect(),
+    air: opts.air ?? appSettings.collageAir
   });
   if (!layout.clusters.length) return;
 

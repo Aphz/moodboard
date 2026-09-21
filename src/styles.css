@@ -128,6 +128,8 @@ input[type='checkbox'], input[type='radio'] { width: 22px; height: 22px; min-wid
 .dialog label.row { cursor: pointer; }
 .dialog label.row input { flex: none; }
 .dialog label.row span { flex: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.chip.glyph { min-width: 44px; min-height: 44px; font-size: 20px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 .pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin: 10px 0; max-height: min(46vh, 420px); overflow: auto; padding: 2px; }
 .pin-cell { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: rgba(127, 127, 127, 0.15); border: 2px solid transparent; padding: 0; }
 .pin-cell img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.35; transition: opacity 0.12s ease-out; }

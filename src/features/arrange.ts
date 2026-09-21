@@ -220,6 +220,13 @@ export interface MasonryOptions {
   aspect?: number;
   /** Deja que las imágenes apaisadas ocupen dos columnas (collage con variedad). */
   spanWide?: boolean;
+  /**
+   * Aire entre imágenes como fracción del ancho de columna. Sirve para que la
+   * separación no dependa del tamaño de las imágenes del tablero: 0,03 deja un
+   * collage apretado y 0,18 uno donde respira. Si el `padding` recibido es
+   * mayor, manda el `padding`.
+   */
+  air?: number;
 }
 
 /**
@@ -310,9 +317,9 @@ function bestGap(gaps: Gap[], need: number, top: number): number {
  * Respeta el orden recibido, así que ordenar la entrada cambia el resultado.
  */
 export function masonryBoxes(items: Item[], opts: MasonryOptions): { boxes: MasonryBox[]; w: number; h: number } {
-  const padding = safePadding(opts.padding);
   const colW = opts.columnWidth && opts.columnWidth > 0 ? opts.columnWidth : defaultColumnWidth(items);
   if (!items.length || colW <= 0) return { boxes: [], w: 0, h: 0 };
+  const padding = Math.max(safePadding(opts.padding), colW * Math.max(0, opts.air ?? 0));
   const columns = Math.max(1, Math.round(opts.columns ?? columnsFor(items, colW, opts.aspect ?? 1)));
 
   const heights = new Array<number>(columns).fill(0);
@@ -382,7 +389,7 @@ export function masonryBoxes(items: Item[], opts: MasonryOptions): { boxes: Maso
  */
 export function arrangeMasonry(
   items: Item[],
-  opts: ArrangeOptions & { columns?: number; columnWidth?: number; spanWide?: boolean }
+  opts: ArrangeOptions & { columns?: number; columnWidth?: number; spanWide?: boolean; air?: number }
 ): Placement[] {
   const list = boxed(items);
   const u = currentUnion(list);
@@ -393,7 +400,8 @@ export function arrangeMasonry(
     aspect: opts.aspect,
     columns: opts.columns,
     columnWidth: opts.columnWidth,
-    spanWide: opts.spanWide
+    spanWide: opts.spanWide,
+    air: opts.air
   });
   if (!boxes.length) return [];
   const dx = target.x - w / 2;

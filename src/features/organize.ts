@@ -45,6 +45,12 @@ export interface OrganizeOptions {
   aspect: number;
   /** Ancho de columna; por defecto, la mediana de los anchos actuales. */
   columnWidth?: number;
+  /**
+   * Aire entre imágenes como fracción del ancho de columna (ver
+   * `MasonryOptions.air`). Un tablero no se llena de imágenes pegadas: cuánto
+   * respira es parte del gusto de cada quien, así que se elige al organizar.
+   */
+  air?: number;
 }
 
 /** Desequilibrio de alto tolerado entre categorías antes de añadir columnas. */
@@ -104,8 +110,6 @@ function columnsPerCategory(weights: number[], wanted: number, maxTotal: number)
  */
 export function layoutByCategory(items: Item[], clusters: CategoryCluster[], opts: OrganizeOptions): OrganizeLayout {
   const byId = new Map(items.map((i) => [i.id, i]));
-  const padding = Math.max(0, opts.padding);
-  const gap = Math.max(padding, opts.gap);
   const titleHeight = Math.max(0, opts.titleHeight);
 
   // 1. categorías con ítems reales, en el orden recibido
@@ -121,6 +125,10 @@ export function layoutByCategory(items: Item[], clusters: CategoryCluster[], opt
   const all = groups.flatMap((g) => g.members);
   const colW = opts.columnWidth && opts.columnWidth > 0 ? opts.columnWidth : defaultColumnWidth(all);
   if (colW <= 0) return { placements: [], clusters: [] };
+  // el aire se mide contra la columna, así que el tablero respira igual con
+  // imágenes grandes o chicas
+  const padding = Math.max(Math.max(0, opts.padding), colW * Math.max(0, opts.air ?? 0));
+  const gap = Math.max(padding, opts.gap);
 
   // 3. columnas totales para la proporción de la vista, repartidas por peso.
   //    El peso es el largo de columna que consume cada categoría: una imagen

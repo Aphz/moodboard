@@ -234,6 +234,7 @@ export class Toolbar {
       this.entry('show_all'),
       { sep: true },
       this.entry('find_duplicates'),
+      this.entry('ornaments'),
       ...(aiAvailable() ? [this.entry('ai_describe'), this.entry('ai_organize')] : []),
       { sep: true },
       this.entry('shortcuts'),
@@ -261,6 +262,7 @@ export class Toolbar {
       ...(hasImg ? [this.entry('crop'), this.entry('discard_crop'), this.entry('replace_image'), this.entry('extract_palette'), this.entry('add_palette_note')] : []),
       ...(hasImg && aiAvailable() ? [this.entry('ai_tag'), this.entry('ai_organize')] : []),
       ...(hasImg ? [this.entry('ai_find_similar')] : []),
+      this.entry('connect_items'),
       { sep: true },
       {
         label: t('ui_more'),
@@ -309,6 +311,7 @@ export class Toolbar {
       this.entry('zoom_fit'),
       this.entry('arrange_optimal'),
       this.entry('arrange_masonry'),
+      this.entry('ornaments'),
       { sep: true },
       this.entry('toggle_grid', { checked: S.scene.settings.grid.enabled }),
       this.entry('canvas_color'),

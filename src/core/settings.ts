@@ -34,7 +34,16 @@ export interface AppSettings {
   aiCategories: string;
   /** Si es true, la IA propone las categorías según el tablero en vez de usar `aiCategories` */
   aiCategoriesAdHoc: boolean;
+  /**
+   * Aire del collage: separación entre imágenes como fracción del ancho de
+   * columna. Un tablero apretado y uno que respira son decisiones de gusto, y
+   * cambian según el uso, así que se guarda como preferencia.
+   */
+  collageAir: number;
 }
+
+/** Opciones de aire del collage (fracción del ancho de columna). */
+export const COLLAGE_AIR = { dense: 0.03, balanced: 0.08, wide: 0.18 } as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   language: 'es',
@@ -52,7 +61,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiModel: 'claude-haiku-4-5',
   googleClientId: '',
   aiCategories: 'Poses, Texturas, Ropa',
-  aiCategoriesAdHoc: false
+  aiCategoriesAdHoc: false,
+  collageAir: COLLAGE_AIR.balanced
 };
 
 export let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
