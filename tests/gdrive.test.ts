@@ -684,6 +684,8 @@ describe('motor de sincronización', () => {
     const settings = await import('../src/core/settings');
     const previo = settings.appSettings.googleClientId;
     settings.appSettings.googleClientId = '';
+    // El `.env` versionado fija un ID para la build: se anula sólo en este test.
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', '');
     try {
       const sync = await loadSync();
       expect(sync.hasClientId()).toBe(false);
@@ -692,6 +694,7 @@ describe('motor de sincronización', () => {
       expect(sync.getSyncUser()).toBeNull();
       expect(fetch).not.toHaveBeenCalled();
     } finally {
+      vi.unstubAllEnvs();
       settings.appSettings.googleClientId = previo;
     }
   });
