@@ -735,6 +735,56 @@ describe('motor de sincronización', () => {
     await sync.disconnectGoogle();
   });
 
+  it('al recuperar el foco sondea una vez y no repite en menos de 3 s', async () => {
+    connectedState();
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+    const changesCalls = () => server.calls.filter((c) => c.url.includes('/drive/v3/changes?')).length;
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    };
+    // la sincronización inicial acaba de terminar: el foco inmediato no sondea
+    window.dispatchEvent(new Event('focus'));
+    await settle();
+    expect(changesCalls()).toBe(0);
+
+    const ahora = Date.now();
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(ahora + 5000);
+    window.dispatchEvent(new Event('focus'));
+    await settle();
+    expect(changesCalls()).toBe(1);
+    // segundo foco inmediato ⇒ no repite
+    window.dispatchEvent(new Event('focus'));
+    await settle();
+    expect(changesCalls()).toBe(1);
+    spy.mockRestore();
+    await sync.disconnectGoogle();
+  });
+
+  it('la reconciliación periódica no relee tableros que no cambiaron en ningún lado', async () => {
+    const { scenesFolder } = connectedState();
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    const otro = scene('s_otro', 200, [note('a', 1)]);
+    mem.scenes.set(otro.id, otro);
+    server.putScene(otro, scenesFolder, '2025-06-06T00:00:00.000Z');
+    const persistence = await import('../src/core/persistence');
+    const loadSpy = vi.spyOn(persistence, 'loadScene');
+
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+    // la primera pasada sí lee el tablero cerrado para compararlo
+    expect(loadSpy.mock.calls.some((c) => c[0] === 's_otro')).toBe(true);
+    loadSpy.mockClear();
+
+    await sync.syncNow();
+    expect(sync.getSyncState()).toBe('synced');
+    expect(loadSpy.mock.calls.some((c) => c[0] === 's_otro')).toBe(false);
+    await sync.disconnectGoogle();
+  });
+
   it('con ID de cliente pero sin sesión guardada queda "signed-out"', async () => {
     const sync = await loadSync();
     expect(sync.hasClientId()).toBe(true);

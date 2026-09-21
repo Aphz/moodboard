@@ -15,7 +15,8 @@
  *     o fusiona (`mergeScenes`) según corresponda.
  *  3. Cada 10 s (con la app visible) se consulta `changes.list` para enterarse
  *     de lo que hizo el otro dispositivo.
- *  4. Cualquier cambio local se sube 1,5 s después del último evento del store,
+ *  4. Cualquier cambio local se sube 2 s después del último evento del store
+ *     (y nunca dos veces en menos de 6 s),
  *     y una vez por minuto se reconcilia la lista completa (`files.list`).
  *
  * Nada de lo que ocurre aquí puede romper la app: todos los callbacks están
@@ -31,7 +32,8 @@ import {
   loadScene,
   saveScene,
   setKV,
-  setRemoteBlobProvider
+  setRemoteBlobProvider,
+  type SceneMeta
 } from '../core/persistence';
 import { appSettings, updateAppSettings } from '../core/settings';
 import { t } from '../i18n';
@@ -62,10 +64,14 @@ interface SyncRecord {
   remoteMtime: number;
   /** Identificador del archivo en Drive. */
   fileId: string;
+  /** `updatedAt` local del tablero en ese momento (para saltar lecturas). */
+  updatedAt?: number;
 }
 
 /** Milisegundos de espera tras el último cambio antes de subir el tablero. */
-const PUSH_DEBOUNCE_MS = 1500;
+const PUSH_DEBOUNCE_MS = 2000;
+/** Distancia mínima entre dos subidas: Drive limita las escrituras por archivo. */
+const PUSH_MIN_GAP_MS = 6000;
 /** Reintento cuando el usuario está en medio de un gesto. */
 const BUSY_RETRY_MS = 1000;
 /** Cada cuánto se consulta `changes.list` con la app visible. */
@@ -133,8 +139,10 @@ let errorMsg = '';
 let lastSyncAt = 0;
 let syncing = false;
 let syncPending = false;
-/** Último sondeo de cambios, para no repetirlo al recuperar el foco. */
+/** Último sondeo o sincronización, para no repetirlo al recuperar el foco. */
 let lastPollAt = 0;
+/** Última subida, para espaciar las escrituras sobre el mismo archivo. */
+let lastPushAt = 0;
 let netBound = false;
 
 let unsubscribeStore: (() => void) | null = null;
@@ -171,11 +179,12 @@ export function getSyncError(): string {
 }
 
 /** Usuario con sesión de Google iniciada, o `null`. */
-/** ¿Hay una cuenta de Google conectada en este dispositivo? */
+/** ¿Hay una cuenta conectada y el motor ya está en marcha? */
 export function isConnected(): boolean {
-  return !!token;
+  return !!token && !!drive;
 }
 
+/** Usuario con sesión de Google iniciada, o null. */
 export function getSyncUser(): { email: string } | null {
   return token ? { email: token.email } : null;
 }
@@ -498,14 +507,18 @@ function bindNetwork() {
   });
 }
 
-/** Sube el tablero abierto 1,5 s después del último cambio real. */
+/**
+ * Sube el tablero abierto 2 s después del último cambio real, sin acercar
+ * dos subidas a menos de `PUSH_MIN_GAP_MS`.
+ */
 function watchStore() {
   if (unsubscribeStore || !app) return;
   unsubscribeStore = app.store.subscribe((e) => {
     if (e.type === 'viewport' || e.type === 'selection') return;
     if (typeof window === 'undefined') return;
     clearTimeout(pushTimer);
-    pushTimer = window.setTimeout(() => void pushCurrentScene(), PUSH_DEBOUNCE_MS);
+    const wait = Math.max(PUSH_DEBOUNCE_MS, lastPushAt + PUSH_MIN_GAP_MS - Date.now());
+    pushTimer = window.setTimeout(() => void pushCurrentScene(), wait);
   });
 }
 
@@ -609,12 +622,19 @@ async function fullSync(): Promise<void> {
       fileIds.set(m.sceneId, m.fileId);
     }
     const local = await listScenes();
+    const localById = new Map(local.map((l) => [l.id, l]));
+    const openId = app?.store.scene.id;
     const ids = new Set<string>([...remoteById.keys(), ...local.map((l) => l.id)]);
-    for (const id of ids) await syncScene(id, remoteById.get(id) ?? null);
+    for (const id of ids) {
+      const meta = remoteById.get(id) ?? null;
+      if (id !== openId && (await unchangedSinceLastSync(id, meta, localById.get(id)))) continue;
+      await syncScene(id, meta);
+    }
     await pushCurrentScene();
     await drive.pruneDeleted(remote);
     await ensurePageToken();
     lastSyncAt = Date.now();
+    lastPollAt = lastSyncAt;
     await setKV(KV_LAST_SYNC, lastSyncAt);
     setState('synced');
   } catch (e) {
@@ -626,6 +646,18 @@ async function fullSync(): Promise<void> {
       void fullSync();
     }
   }
+}
+
+/**
+ * Atajo de la reconciliación periódica: si Drive no cambió desde la última
+ * sincronización y el `updatedAt` local es el anotado entonces, no hace falta
+ * leer el tablero completo de IndexedDB.
+ */
+async function unchangedSinceLastSync(id: string, meta: RemoteSceneMeta | null, local: SceneMeta | undefined): Promise<boolean> {
+  if (!meta || !local || meta.deleted) return false;
+  const rec = await getKV<SyncRecord | null>(recKey(id), null);
+  if (!rec || rec.updatedAt === undefined) return false;
+  return rec.remoteMtime === meta.modifiedTime && rec.updatedAt === local.updatedAt;
 }
 
 /**
@@ -725,8 +757,9 @@ async function syncScene(id: string, meta: RemoteSceneMeta | null): Promise<void
 
 /** Consulta los cambios que hizo el otro dispositivo desde la última vez. */
 async function pollChanges(): Promise<void> {
+  if (!drive || !token || syncing) return;
+  syncing = true;
   try {
-    if (!drive || !token || syncing) return;
     lastPollAt = Date.now();
     const pageToken = await getKV<string | null>(KV_PAGE_TOKEN, null);
     if (!pageToken) {
@@ -761,6 +794,12 @@ async function pollChanges(): Promise<void> {
     setState('synced');
   } catch (e) {
     fail(e);
+  } finally {
+    syncing = false;
+    if (syncPending) {
+      syncPending = false;
+      void fullSync();
+    }
   }
 }
 
@@ -791,6 +830,7 @@ async function pushScene(scene: Scene, force = false): Promise<void> {
     fileId = rec?.fileId ?? null;
   }
   const saved = await d.uploadScene(scene, fileId);
+  lastPushAt = Date.now();
   fileIds.set(scene.id, saved.fileId);
   await uploadSceneBlobs(scene);
   await markSynced(scene, saved.fileId, saved.modifiedTime, digest);
@@ -804,7 +844,7 @@ async function markSynced(
 ): Promise<void> {
   syncedDigest.set(scene.id, digest);
   fileIds.set(scene.id, fileId);
-  const rec: SyncRecord = { digest, remoteMtime, fileId };
+  const rec: SyncRecord = { digest, remoteMtime, fileId, updatedAt: scene.updatedAt };
   await setKV(recKey(scene.id), rec);
 }
 

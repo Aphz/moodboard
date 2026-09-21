@@ -211,7 +211,10 @@ tiene prioridad.
   de Drive llega con retraso. Además se sincroniza al volver a la app
   (`visibilitychange`), al recuperar el foco, al recuperar la red y al abrir
   el listado de tableros.
-- **Subida de lo local**: 1,5 s después del último cambio del tablero abierto.
+- **Subida de lo local**: 2 s después del último cambio del tablero abierto,
+  y nunca dos subidas en menos de 6 s (Drive limita las escrituras por
+  archivo). La reconciliación periódica no relee de IndexedDB los tableros
+  que no cambiaron ni en Drive ni en el dispositivo.
 - **Errores**: un 401 renueva el token una vez; los 403 por cuota, los 429 y
   los 5xx se reintentan con espera exponencial (3 intentos). El usuario solo
   ve mensajes traducidos.

@@ -11,18 +11,33 @@ export async function showScenesDialog(app: App) {
   const grid = h('div', { class: 'grid-list' });
   const status = h('div', { class: 'hint sync-hint', 'aria-live': 'polite' });
   let offSync: (() => void) | null = null;
+  let closed = false;
+  /** URLs de miniaturas vivas, para liberarlas al repintar o cerrar. */
+  let thumbUrls: string[] = [];
+  const releaseThumbs = () => {
+    for (const u of thumbUrls) URL.revokeObjectURL(u);
+    thumbUrls = [];
+  };
   const d = showDialog([h('h2', null, t('ui_recent')), status, grid], {
     wide: true,
     onClose: () => {
+      closed = true;
       offSync?.();
       offSync = null;
+      releaseThumbs();
     }
   });
   let gen = 0;
-  const refresh = async () => {
+  /** Huella del listado pintado, para no repintar si nada cambió. */
+  let painted = '';
+  const refresh = async (force = false) => {
     const mine = ++gen;
     const list = await listScenes();
-    if (mine !== gen) return; // llegó otra actualización mientras leíamos
+    if (mine !== gen || closed) return; // llegó otra actualización o se cerró
+    const signature = list.map((m) => `${m.id}:${m.updatedAt}:${m.itemCount}`).join('|');
+    if (!force && signature === painted) return;
+    painted = signature;
+    releaseThumbs();
     clear(grid);
     const newCard = h('div', { class: 'card new' }, svg(icons.plus, 28), h('div', { class: 'meta' }, t('cmd_new')));
     newCard.addEventListener('click', async () => {
@@ -38,7 +53,11 @@ export async function showScenesDialog(app: App) {
     if (!list.length) grid.appendChild(h('p', { class: 'hint', style: { gridColumn: '1 / -1' } }, t('ui_no_recent')));
     for (const m of list) {
       const thumb = h('div', { class: 'thumb' });
-      if (m.thumb) thumb.style.backgroundImage = `url(${URL.createObjectURL(m.thumb)})`;
+      if (m.thumb) {
+        const url = URL.createObjectURL(m.thumb);
+        thumbUrls.push(url);
+        thumb.style.backgroundImage = `url(${url})`;
+      }
       else thumb.appendChild(svg(icons.image, 28));
       const card = h(
         'div',
@@ -60,7 +79,7 @@ export async function showScenesDialog(app: App) {
               run: async () => {
                 if (await app.confirm(t('ui_confirm_delete_scene'), true)) {
                   await app.deleteSceneById(m.id);
-                  await refresh();
+                  await refresh(true);
                 }
               }
             }
@@ -79,7 +98,8 @@ export async function showScenesDialog(app: App) {
       grid.appendChild(card);
     }
   };
-  await refresh();
+  await refresh(true);
+  if (closed) return; // se cerró mientras leíamos la lista
 
   // Con una cuenta conectada, el listado pide los tableros de los demás
   // dispositivos al abrirse y se vuelve a pintar cuando llegan.
