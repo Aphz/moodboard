@@ -498,10 +498,14 @@ export function renderAiSettings(): HTMLElement {
   /** Estado actual: clave guardada (ofuscada) o aviso de que no hay. */
   const keyState = h('div', { class: 'hint' });
   const removeBtn = h('button', { class: 'btn small danger' }, t('ui_ai_key_remove'));
+  // La clave sólo se ve una vez en la consola de Anthropic: poder copiarla
+  // desde aquí permite guardarla en el llavero y no depender de este almacén.
+  const copyBtn = h('button', { class: 'btn small' }, t('ui_ai_key_copy'));
   const syncKeyState = () => {
     const saved = appSettings.aiApiKey;
     keyState.textContent = saved ? t('ui_ai_key_saved', { key: redactKey(saved) }) : t('ui_ai_key_none');
     removeBtn.style.display = saved ? '' : 'none';
+    copyBtn.style.display = saved ? '' : 'none';
   };
   syncKeyState();
 
@@ -528,6 +532,18 @@ export function renderAiSettings(): HTMLElement {
       e.preventDefault();
       saveKey();
     }
+  });
+  copyBtn.addEventListener('click', () => {
+    void (async () => {
+      const key = appSettings.aiApiKey;
+      if (!key) return;
+      try {
+        await navigator.clipboard.writeText(key);
+        toast(t('ui_ai_key_copied'), { ms: 5000 });
+      } catch {
+        toast(t('ui_ai_key_copy_failed'), { error: true });
+      }
+    })();
   });
   removeBtn.addEventListener('click', async () => {
     if (!(await confirmDialog(t('ui_ai_key_remove_confirm'), { danger: true }))) return;
@@ -565,7 +581,7 @@ export function renderAiSettings(): HTMLElement {
     h('p', { class: 'hint' }, t('ui_ai_what_organize')),
     h('p', { class: 'hint' }, t('ui_ai_what_similar')),
     h('p', { class: 'hint' }, t('ui_ai_billing_note')),
-    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, keyState, h('div', { class: 'hint' }, t('ui_ai_key_hint')), h('div', { class: 'row' }, removeBtn)),
+    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, keyState, h('div', { class: 'hint' }, t('ui_ai_key_hint')), h('div', { class: 'row' }, copyBtn, removeBtn)),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), sel, price),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_usage')), usage, h('div', { class: 'row' }, resetBtn)),
     h('p', { class: 'hint' }, t('ui_ai_local_key'))

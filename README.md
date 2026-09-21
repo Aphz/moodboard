@@ -123,8 +123,9 @@ en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store
 copia de respaldo en `localStorage` por si Safari vacía la base), nunca se sube a ninguna
 parte y se muestra ofuscada. Sólo se guarda si tiene forma de clave (`sk-ant-…`): un campo
 vacío o una contraseña autocompletada por iOS no la pisan, y para quitarla hay un botón
-explícito. Sin clave, los comandos IA quedan
-desactivados y ni siquiera aparecen en los menús.
+explícito. Hay también un botón **Copiar clave** para guardarla en el llavero o en tu gestor
+de contraseñas: así no dependes de este almacén si el navegador borra los datos del sitio.
+Sin clave, los comandos IA quedan desactivados y ni siquiera aparecen en los menús.
 
 - **IA: describir tablero** — manda miniaturas de hasta 20 imágenes y el texto de las notas, y devuelve una descripción en markdown que puedes insertar como nota.
 - **IA: etiquetar imágenes seleccionadas** — devuelve etiquetas por imagen y las agrega a `item.tags` en un solo paso de deshacer.

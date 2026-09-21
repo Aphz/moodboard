@@ -105,7 +105,13 @@ function writeKeyBackup(key: string): void {
 }
 
 export async function loadAppSettings(): Promise<AppSettings> {
-  const saved = await getKV<Partial<AppSettings>>('appSettings', {});
+  let saved: Partial<AppSettings> = {};
+  try {
+    saved = await getKV<Partial<AppSettings>>('appSettings', {});
+  } catch {
+    // IndexedDB inaccesible (modo privado, base bloqueada): se sigue con los
+    // valores por defecto en vez de dejar la app sin arrancar
+  }
   appSettings = { ...DEFAULT_SETTINGS, ...saved };
   // si IndexedDB perdió la clave pero queda el respaldo, se restaura
   if (!appSettings.aiApiKey) {
@@ -126,7 +132,16 @@ export async function loadAppSettings(): Promise<AppSettings> {
 }
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<void> {
-  appSettings = { ...appSettings, ...patch };
+  const next = { ...appSettings, ...patch };
+  // Guardar CUALQUIER preferencia reescribe el objeto entero. Si la clave no
+  // viene en el parche y en memoria está vacía, se recupera del respaldo antes
+  // de escribir: así una lectura fallida de IndexedDB no se vuelve una pérdida
+  // definitiva al cambiar, por ejemplo, el modelo o el idioma.
+  if (patch.aiApiKey === undefined && !next.aiApiKey) {
+    const backup = readKeyBackup();
+    if (backup) next.aiApiKey = backup;
+  }
+  appSettings = next;
   if (patch.aiApiKey !== undefined) writeKeyBackup(patch.aiApiKey);
   await setKV('appSettings', appSettings);
   for (const l of listeners) l(appSettings);
