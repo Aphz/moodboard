@@ -321,5 +321,7 @@ export const es = {
   ui_sync_share: 'Enviar configuración al otro dispositivo',
   ui_sync_share_hint: 'El enlace lleva la URL y la clave anon (pública por diseño). En el otro dispositivo sólo vas a escribir el correo y la contraseña.',
   ui_sync_share_copied: 'Enlace copiado: ábrelo en el otro dispositivo',
-  ui_sync_setup_received: 'Configuración recibida: ahora entra con tu correo y tu contraseña'
+  ui_sync_setup_received: 'Configuración recibida: ahora entra con tu correo y tu contraseña',
+  ui_sync_share_sql: 'Compartir SQL…',
+  ui_sync_show_sql: 'Ver SQL aquí'
 } as const;

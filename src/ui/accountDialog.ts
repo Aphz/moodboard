@@ -18,6 +18,9 @@ import { t } from '../i18n';
 import { h, svg } from './dom';
 import { confirmDialog, showDialog, toast, type DialogHandle } from './dialogs';
 import schemaSql from '../../supabase/schema.sql?raw';
+
+/** Copia del esquema publicada en GitHub, por si ningún método de copia funciona en el dispositivo. */
+const SCHEMA_RAW_URL = 'https://raw.githubusercontent.com/Aphz/moodboard/main/supabase/schema.sql';
 import {
   checkSetup,
   clearSyncConfig,
@@ -330,9 +333,36 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
       });
       const open = h('button', { class: 'btn' }, t('ui_sync_open_sql'));
       open.addEventListener('click', () => openPage(sqlEditorUrl(getSyncConfig()?.url ?? url)));
+      // Respaldos para iPad: la hoja de compartir (trae "Copiar") y el SQL en pantalla para copiarlo a mano.
+      const share = h('button', { class: 'btn' }, t('ui_sync_share_sql'));
+      share.addEventListener('click', async () => {
+        const file = new File([schemaSql], 'schema.sql', { type: 'text/plain' });
+        try {
+          if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'schema.sql' });
+          else if (navigator.share) await navigator.share({ text: schemaSql, title: 'schema.sql' });
+          else openPage(SCHEMA_RAW_URL);
+        } catch {
+          /* cancelado */
+        }
+      });
+      const view = h('button', { class: 'btn' }, t('ui_sync_show_sql'));
+      const sqlBox = h('textarea', { readonly: true, rows: '10', style: { display: 'none', fontFamily: 'ui-monospace, monospace', fontSize: '12px', marginTop: '8px' } }) as HTMLTextAreaElement;
+      sqlBox.value = schemaSql;
+      view.addEventListener('click', () => {
+        const shown = sqlBox.style.display !== 'none';
+        sqlBox.style.display = shown ? 'none' : 'block';
+        if (!shown) {
+          sqlBox.focus();
+          sqlBox.select();
+        }
+      });
       const again = h('button', { class: 'btn', disabled: checking }, t('ui_sync_recheck'));
       again.addEventListener('click', () => void runCheck(false));
-      acts.push(h('p', { class: 'hint' }, t('ui_sync_data_sql_hint')), h('div', { class: 'actions' }, copy, open, again));
+      acts.push(
+        h('p', { class: 'hint' }, t('ui_sync_data_sql_hint')),
+        h('div', { class: 'actions', style: { justifyContent: 'flex-start', flexWrap: 'wrap' } }, copy, share, view, open, again),
+        sqlBox
+      );
     }
     return [
       h(

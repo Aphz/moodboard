@@ -323,5 +323,7 @@ export const en: Record<keyof typeof es, string> = {
   ui_sync_share: 'Send setup to the other device',
   ui_sync_share_hint: 'The link carries the URL and the anon key (public by design). On the other device you will only type the email and password.',
   ui_sync_share_copied: 'Link copied: open it on the other device',
-  ui_sync_setup_received: 'Setup received: now sign in with your email and password'
+  ui_sync_setup_received: 'Setup received: now sign in with your email and password',
+  ui_sync_share_sql: 'Share SQL…',
+  ui_sync_show_sql: 'Show SQL here'
 };
