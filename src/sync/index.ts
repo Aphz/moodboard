@@ -38,6 +38,42 @@ export { mergeScenes, sceneDigest } from './merge';
 /** Estados observables de la sincronización. */
 export type SyncState = 'off' | 'signed-out' | 'syncing' | 'synced' | 'offline' | 'error';
 
+/** Largo mínimo de la contraseña (coincide con el mínimo por defecto de Supabase). */
+export const MIN_PASSWORD_LENGTH = 8;
+
+/** Resultado de `signIn`, pensado para que la interfaz decida qué mostrar. */
+export type SignInCode = 'ok' | 'confirm-email' | 'wrong-password' | 'error';
+
+/** Respuesta de `signIn`: nunca lanza, siempre trae un mensaje traducido. */
+export interface SignInResult {
+  ok: boolean;
+  code: SignInCode;
+  message: string;
+}
+
+/** Estado de un paso del asistente: ✅ ❌ ⏳. */
+export type SetupStepState = 'ok' | 'fail' | 'pending';
+
+/** Un paso comprobado, con su explicación de una línea ya traducida. */
+export interface SetupStep {
+  state: SetupStepState;
+  message: string;
+}
+
+/** Informe del asistente de configuración (`checkSetup`). */
+export interface SetupReport {
+  /** Subdominio del proyecto (`abcdefgh`), o cadena vacía si la URL no sirve. */
+  ref: string;
+  /** Paso A: la URL responde y la clave anon vale. */
+  project: SetupStep;
+  /** Paso B: `mailer_autoconfirm` activo (no se necesita el correo). */
+  confirmEmail: SetupStep;
+  /** Paso C: tabla `scenes` y bucket `blobs`. */
+  data: SetupStep;
+  /** `true` cuando falta ejecutar `supabase/schema.sql`. */
+  needsSql: boolean;
+}
+
 /** Milisegundos de espera tras el último cambio antes de subir la escena. */
 const PUSH_DEBOUNCE_MS = 3000;
 /** Reintento cuando el usuario está en medio de un gesto. */
@@ -141,13 +177,35 @@ function setState(s: SyncState) {
 }
 
 function fail(e: unknown) {
-  errorMsg = engine ? engine.errorMessage(e) : String((e as { message?: string })?.message ?? e);
+  errorMsg = describeSyncError(e);
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     setState('offline');
     return;
   }
   console.warn('[sync]', e);
   setState('error');
+}
+
+// ---------------------------------------------------------------------------
+// mensajes de error
+
+/**
+ * Traduce los errores habituales de Supabase a un texto claro en el idioma de
+ * la app. El usuario no debería ver nunca la jerga cruda de la API.
+ */
+export function describeSyncError(e: unknown): string {
+  const raw = typeof e === 'string' ? e : String((e as { message?: string; error_description?: string })?.message ?? (e as { error_description?: string })?.error_description ?? e ?? '');
+  const m = raw.toLowerCase();
+  if (!raw || raw === 'undefined' || raw === 'null') return t('ui_sync_err_unknown');
+  if (m.includes('rate limit') || m.includes('over_email_send_rate_limit') || m.includes('too many requests')) return t('ui_sync_err_rate_limit');
+  if (m.includes('token has expired') || m.includes('otp_expired') || m.includes('expired or is invalid')) return t('ui_sync_err_token');
+  if (m.includes('invalid login credentials') || m.includes('user already registered') || m.includes('user_already_exists')) return t('ui_sync_err_wrong_password');
+  if (m.includes('email not confirmed') || m.includes('email_not_confirmed')) return t('ui_sync_err_confirm_email');
+  if (m.includes('password should be at least') || m.includes('weak_password')) return t('ui_sync_password_short');
+  if (m.includes('failed to fetch') || m.includes('networkerror') || m.includes('load failed') || m.includes('network request failed')) return t('ui_sync_err_network');
+  if (m.includes('could not find the table') || (m.includes('relation') && m.includes('does not exist'))) return t('ui_sync_data_no_table');
+  if (m.includes('bucket not found')) return t('ui_sync_data_no_bucket');
+  return `${t('ui_sync_err_unknown')} (${raw})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,23 +372,71 @@ export async function clearSyncConfig(): Promise<void> {
   setState('off');
 }
 
-/** Envía un código de un solo uso al correo indicado. */
-export async function sendOtp(email: string): Promise<void> {
-  const client = await ensureClient();
-  const eng = await loadEngine();
-  const { error } = await client.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
-  if (error) throw new Error(eng.errorMessage(error));
+/**
+ * Inicia sesión con correo y contraseña, creando la cuenta si hace falta.
+ *
+ * No depende del correo electrónico: primero prueba `signInWithPassword` y,
+ * si esas credenciales no existen, registra la cuenta con `signUp`. Nunca
+ * lanza; devuelve un resultado con un código para que la interfaz sepa qué
+ * mostrar (por ejemplo, el enlace para desactivar "Confirm email").
+ */
+export async function signIn(email: string, password: string): Promise<SignInResult> {
+  const mail = email.trim();
+  if (!mail) return { ok: false, code: 'error', message: t('ui_sync_email_required') };
+  if (password.length < MIN_PASSWORD_LENGTH) return { ok: false, code: 'error', message: t('ui_sync_password_short') };
+  try {
+    const client = await ensureClient();
+
+    // 1. ¿ya existe la cuenta?
+    const signed = await client.auth.signInWithPassword({ email: mail, password });
+    if (signed.data?.session?.user) return await adoptSession(signed.data.session.user, mail);
+    if (signed.error && !isBadCredentials(signed.error)) {
+      const message = describeSyncError(signed.error);
+      const code: SignInCode = message === t('ui_sync_err_confirm_email') ? 'confirm-email' : 'error';
+      return { ok: false, code, message };
+    }
+
+    // 2. no existe (o la contraseña no coincide) ⇒ intentar crearla
+    const created = await client.auth.signUp({ email: mail, password });
+    if (created.error) {
+      const message = describeSyncError(created.error);
+      const code: SignInCode = message === t('ui_sync_err_wrong_password') ? 'wrong-password' : 'error';
+      return { ok: false, code, message };
+    }
+    if (created.data.session?.user) return await adoptSession(created.data.session.user, mail);
+
+    const newUser = created.data.user as { identities?: unknown[] } | null;
+    if (newUser) {
+      // con "Confirm email" activado, Supabase devuelve un usuario sin
+      // identidades cuando el correo ya estaba registrado (no delata cuentas)
+      if (Array.isArray(newUser.identities) && newUser.identities.length === 0) {
+        return { ok: false, code: 'wrong-password', message: t('ui_sync_err_wrong_password') };
+      }
+      // usuario creado pero sin sesión ⇒ falta desactivar la confirmación
+      return { ok: false, code: 'confirm-email', message: t('ui_sync_err_confirm_email') };
+    }
+    return { ok: false, code: 'error', message: t('ui_sync_err_unknown') };
+  } catch (e) {
+    return { ok: false, code: 'error', message: describeSyncError(e) };
+  }
 }
 
-/** Verifica el código recibido por correo e inicia la sincronización. */
-export async function verifyOtp(email: string, code: string): Promise<void> {
-  const client = await ensureClient();
-  const eng = await loadEngine();
-  const { data, error } = await client.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: 'email' });
-  if (error) throw new Error(eng.errorMessage(error));
-  if (!data.user) throw new Error(t('ui_sync_invalid_code'));
-  user = { id: data.user.id, email: data.user.email ?? email.trim() };
-  await start();
+/** ¿El error dice sólo que las credenciales no sirven (cuenta inexistente)? */
+function isBadCredentials(e: unknown): boolean {
+  const m = String((e as { message?: string })?.message ?? '').toLowerCase();
+  const code = String((e as { code?: string })?.code ?? '').toLowerCase();
+  return m.includes('invalid login credentials') || code === 'invalid_credentials';
+}
+
+/** Guarda el usuario recién autenticado y arranca la sincronización. */
+async function adoptSession(u: { id: string; email?: string | null }, fallbackEmail: string): Promise<SignInResult> {
+  user = { id: u.id, email: u.email ?? fallbackEmail };
+  try {
+    await start();
+  } catch (e) {
+    fail(e);
+  }
+  return { ok: true, code: 'ok', message: t('ui_sync_account_ok', { email: user.email }) };
 }
 
 /** Cierra la sesión en este dispositivo (los datos locales se conservan). */
@@ -341,6 +447,184 @@ export async function signOut(): Promise<void> {
     fail(e);
   }
   await stop();
+}
+
+// ---------------------------------------------------------------------------
+// asistente de configuración
+
+/** Subdominio del proyecto (`abcdefgh` en `https://abcdefgh.supabase.co`). */
+export function getProjectRef(url: string): string {
+  const m = /^https?:\/\/([a-z0-9-]+)\.supabase\.(co|in|net)\/?/i.exec(url.trim());
+  return m ? m[1] : '';
+}
+
+/** Panel de Supabase: Authentication → Sign In / Providers. */
+export function providersUrl(url: string): string {
+  const ref = getProjectRef(url);
+  return ref ? `https://supabase.com/dashboard/project/${ref}/auth/providers` : 'https://supabase.com/dashboard';
+}
+
+/** Panel de Supabase: SQL Editor con una consulta nueva. */
+export function sqlEditorUrl(url: string): string {
+  const ref = getProjectRef(url);
+  return ref ? `https://supabase.com/dashboard/project/${ref}/sql/new` : 'https://supabase.com/dashboard';
+}
+
+/**
+ * Comprueba la configuración del proyecto y devuelve un informe por pasos.
+ *
+ * El paso "proyecto" y el paso "confirmación de correo" se resuelven con una
+ * sola llamada a `GET {url}/auth/v1/settings` (sólo `fetch`, sin el SDK), así
+ * que se pueden probar con `fetch` simulado. El paso de datos (tabla `scenes`
+ * y bucket `blobs`) necesita el cliente de Supabase ya configurado, por eso
+ * sólo se ejecuta si se pide con `opts.data`.
+ */
+export async function checkSetup(
+  config: SyncConfig | null = getSyncConfig(),
+  opts: { data?: boolean } = {}
+): Promise<SetupReport> {
+  const report: SetupReport = {
+    ref: '',
+    project: { state: 'pending', message: t('ui_sync_project_pending') },
+    confirmEmail: { state: 'pending', message: t('ui_sync_confirm_pending') },
+    data: { state: 'pending', message: t('ui_sync_data_pending') },
+    needsSql: false
+  };
+  const url = (config?.url ?? '').trim().replace(/\/+$/, '');
+  const anonKey = (config?.anonKey ?? '').trim();
+  if (!url || !anonKey) return report;
+
+  report.ref = getProjectRef(url);
+  if (!/^https?:\/\//i.test(url) || !report.ref) {
+    report.project = { state: 'fail', message: t('ui_sync_project_bad_url') };
+    return report;
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${url}/auth/v1/settings`, {
+      headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` }
+    });
+  } catch {
+    report.project = { state: 'fail', message: t('ui_sync_project_bad_url') };
+    return report;
+  }
+  if (res.status === 401 || res.status === 403) {
+    report.project = { state: 'fail', message: t('ui_sync_project_bad_key') };
+    return report;
+  }
+  if (!res.ok) {
+    report.project = { state: 'fail', message: t('ui_sync_project_bad_url') };
+    return report;
+  }
+  report.project = { state: 'ok', message: t('ui_sync_project_ok') };
+
+  let settings: { mailer_autoconfirm?: boolean } = {};
+  try {
+    settings = ((await res.json()) as { mailer_autoconfirm?: boolean }) ?? {};
+  } catch {
+    settings = {};
+  }
+  report.confirmEmail =
+    settings.mailer_autoconfirm === true
+      ? { state: 'ok', message: t('ui_sync_confirm_ok') }
+      : { state: 'fail', message: t('ui_sync_confirm_fail') };
+
+  if (opts.data) await checkData(report);
+  return report;
+}
+
+/** Comprueba la tabla `scenes` y el bucket `blobs` con el cliente guardado. */
+async function checkData(report: SetupReport): Promise<void> {
+  try {
+    const client = await ensureClient();
+    const eng = await loadEngine();
+
+    const table = await client.from(eng.SCENES_TABLE).select('id', { head: true, count: 'exact' });
+    if (table.error) {
+      const msg = eng.errorMessage(table.error).toLowerCase();
+      const code = String((table.error as { code?: string }).code ?? '');
+      if (code === 'PGRST205' || code === '42P01' || msg.includes('does not exist') || msg.includes('could not find the table')) {
+        report.data = { state: 'fail', message: t('ui_sync_data_no_table') };
+        report.needsSql = true;
+        return;
+      }
+      report.data = { state: 'fail', message: describeSyncError(table.error) };
+      return;
+    }
+
+    const bucket = await client.storage.from(eng.BLOBS_BUCKET).list('', { limit: 1 });
+    if (bucket.error) {
+      const msg = eng.errorMessage(bucket.error).toLowerCase();
+      if (msg.includes('bucket not found') || msg.includes('not found')) {
+        report.data = { state: 'fail', message: t('ui_sync_data_no_bucket') };
+        report.needsSql = true;
+        return;
+      }
+      report.data = { state: 'fail', message: describeSyncError(bucket.error) };
+      return;
+    }
+
+    report.data = { state: 'ok', message: t('ui_sync_data_ok') };
+  } catch {
+    report.data = { state: 'pending', message: t('ui_sync_data_pending') };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// enlace para configurar el otro dispositivo
+
+/** Prefijo del hash que transporta la configuración entre dispositivos. */
+export const SETUP_HASH_PREFIX = '#setup=';
+
+function toBase64Url(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromBase64Url(text: string): string {
+  const b64 = text.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(text.length / 4) * 4, '=');
+  const bin = atob(b64);
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+
+/** Base del enlace: la app tal como está abierta, sin fijar ningún dominio. */
+function currentBase(): string {
+  return typeof location === 'undefined' ? '' : location.origin + location.pathname;
+}
+
+/**
+ * Arma el enlace que lleva la configuración al otro dispositivo.
+ * La clave anon es pública por diseño, así que puede viajar en el enlace.
+ */
+export function encodeSetupLink(config: SyncConfig, base: string = currentBase()): string {
+  const payload = JSON.stringify({
+    url: config.url.trim().replace(/\/+$/, ''),
+    anonKey: config.anonKey.trim()
+  });
+  return `${base}${SETUP_HASH_PREFIX}${toBase64Url(payload)}`;
+}
+
+/**
+ * Lee la configuración de un enlace o de un hash (`#setup=…`).
+ * Devuelve `null` si no viene, está corrupto o no parece una URL de proyecto.
+ */
+export function decodeSetupLink(link: string): SyncConfig | null {
+  try {
+    const i = link.indexOf(SETUP_HASH_PREFIX);
+    if (i < 0) return null;
+    const raw = link.slice(i + SETUP_HASH_PREFIX.length).split('&')[0].trim();
+    if (!raw) return null;
+    const data = JSON.parse(fromBase64Url(raw)) as Partial<SyncConfig>;
+    const url = String(data.url ?? '').trim().replace(/\/+$/, '');
+    const anonKey = String(data.anonKey ?? '').trim();
+    if (!/^https?:\/\//i.test(url) || !anonKey) return null;
+    return { url, anonKey };
+  } catch {
+    return null;
+  }
 }
 
 /** Fuerza una sincronización completa ahora mismo. */

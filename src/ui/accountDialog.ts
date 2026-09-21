@@ -1,11 +1,14 @@
 /**
- * Diálogo de cuenta y sincronización, y el botón de estado de la barra
- * superior.
+ * Diálogo de cuenta y sincronización (asistente guiado), y el botón de estado
+ * de la barra superior.
  *
- * El diálogo tiene tres caras según el estado del motor de `src/sync`:
- *   1. sin configurar  → URL + clave anon del proyecto de Supabase.
- *   2. sin sesión      → correo → código de un solo uso → entrar.
- *   3. con sesión      → estado, última sincronización y acciones.
+ * El diálogo es una lista de cuatro pasos que la app comprueba sola:
+ *   1. Proyecto  → URL + clave anon, botón "Probar" (`checkSetup`).
+ *   2. Confirmación de correo desactivada → enlace directo al panel.
+ *   3. Base de datos y almacenamiento → "Copiar SQL" + editor SQL.
+ *   4. Cuenta → correo y contraseña ("Entrar o crear cuenta").
+ *
+ * Nada depende del correo electrónico: no hay códigos ni enlaces mágicos.
  *
  * Los iconos de nube se definen aquí (y no en `src/ui/icons.ts`) para no
  * pisarnos con el resto de la interfaz.
@@ -14,9 +17,15 @@ import type { App } from '../app';
 import { t } from '../i18n';
 import { h, svg } from './dom';
 import { confirmDialog, showDialog, toast, type DialogHandle } from './dialogs';
+import schemaSql from '../../supabase/schema.sql?raw';
+
+/** Copia del esquema publicada en GitHub, por si ningún método de copia funciona en el dispositivo. */
+const SCHEMA_RAW_URL = 'https://raw.githubusercontent.com/Aphz/moodboard/main/supabase/schema.sql';
 import {
+  checkSetup,
   clearSyncConfig,
   configureSync,
+  encodeSetupLink,
   getLastSync,
   getSyncApp,
   getSyncConfig,
@@ -24,11 +33,16 @@ import {
   getSyncState,
   getSyncUser,
   initSync,
+  MIN_PASSWORD_LENGTH,
   onSyncState,
-  sendOtp,
+  providersUrl,
+  signIn,
   signOut,
+  sqlEditorUrl,
   syncNow,
-  verifyOtp,
+  type SetupReport,
+  type SetupStep,
+  type SignInResult,
   type SyncState
 } from '../sync';
 
@@ -86,6 +100,9 @@ function ensureStyles() {
 .tb.sync-syncing svg { animation: sync-pulse 1.1s ease-in-out infinite; }
 @keyframes sync-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .tb.sync-syncing svg { animation: none; } }
+.sync-step { margin-top: 16px; }
+.sync-step h3 { margin: 0 0 4px; }
+.sync-step .actions { margin-top: 10px; flex-wrap: wrap; justify-content: flex-start; }
 `;
   document.head.appendChild(style);
 }
@@ -118,7 +135,7 @@ export function syncStatusIcon(): { el: HTMLElement; destroy(): void } {
 }
 
 // ---------------------------------------------------------------------------
-// diálogo
+// utilidades del diálogo
 
 function field(label: string, control: HTMLElement, hint?: string) {
   return h('div', { class: 'field' }, h('label', null, label), control, hint ? h('div', { class: 'hint' }, hint) : null);
@@ -133,6 +150,37 @@ function fmtDate(ms: number): string {
   }
 }
 
+/** Copia texto al portapapeles, con respaldo para Safari antiguo. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    /* seguir con el respaldo */
+  }
+  try {
+    const ta = h('textarea', { style: { position: 'fixed', opacity: '0', top: '0' } }) as HTMLTextAreaElement;
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Abre una página del panel de Supabase en otra pestaña. */
+function openPage(url: string) {
+  window.open(url, '_blank', 'noopener');
+}
+
+/** Marca visual del paso: ✅ / ❌ / ⏳. */
+function badge(step: SetupStep): string {
+  return step.state === 'ok' ? '✅' : step.state === 'fail' ? '❌' : '⏳';
+}
+
 /** Ejecuta una acción mostrando el error en un toast en vez de lanzarlo. */
 async function guard(fn: () => Promise<void>): Promise<boolean> {
   try {
@@ -144,6 +192,9 @@ async function guard(fn: () => Promise<void>): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// diálogo
+
 /**
  * Abre el diálogo de cuenta. Si no se pasa `app` se usa la registrada en
  * `initSync` (la barra superior no la tiene a mano).
@@ -153,94 +204,237 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
   const body = h('div');
   let offState: (() => void) | null = null;
 
-  /** Correo escrito y si ya se pidió el código (estado local del diálogo). */
-  let email = '';
-  let codeSent = false;
-  /** Cara del diálogo dibujada la última vez, para no borrar lo que se escribe. */
+  // ---- estado local del diálogo (sobrevive a los redibujados) -------------
+  const saved = getSyncConfig();
+  let url = saved?.url ?? '';
+  let anonKey = saved?.anonKey ?? '';
+  let email = getSyncUser()?.email ?? '';
+  let password = '';
+  let report: SetupReport | null = null;
+  let checking = false;
+  /** Último intento de inicio de sesión fallido (para explicar qué pasó). */
+  let authFail: SignInResult | null = null;
+  /** Cara del diálogo dibujada la última vez (config + sesión). */
   let phase = '';
-  const currentPhase = () => (!getSyncConfig() ? 'setup' : !getSyncUser() ? 'auth' : 'account');
+  const currentPhase = () => `${getSyncConfig() ? 'cfg' : 'nocfg'}:${getSyncUser() ? 'in' : 'out'}`;
 
-  const restart = async () => {
-    if (app) await initSync(app);
+  const pending = (message: string): SetupStep => ({ state: 'pending', message });
+
+  /** Paso tal como hay que pintarlo ahora mismo. */
+  const stepOf = (key: 'project' | 'confirmEmail' | 'data'): SetupStep => {
+    if (checking) return pending(t('ui_sync_checking'));
+    if (report) return report[key];
+    if (key === 'project') return pending(getSyncConfig() ? t('ui_sync_checking') : t('ui_sync_project_pending'));
+    if (key === 'confirmEmail') return pending(t('ui_sync_confirm_pending'));
+    return pending(t('ui_sync_data_pending'));
   };
 
-  const build = () => {
-    phase = currentPhase();
-    const state = getSyncState();
-    const user = getSyncUser();
-    const cfg = getSyncConfig();
-    const nodes: (Node | null)[] = [h('h2', null, t('ui_sync_title'))];
-
-    if (!cfg) {
-      // ---- 1. sin configurar ------------------------------------------
-      const url = h('input', { type: 'url', placeholder: 'https://xxxx.supabase.co', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-      const key = h('input', { type: 'text', placeholder: 'eyJhbGciOi…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-      const save = h('button', { class: 'btn primary' }, t('ui_sync_save_config'));
-      save.addEventListener('click', async () => {
-        save.setAttribute('disabled', '');
-        const ok = await guard(() => configureSync({ url: url.value, anonKey: key.value }));
-        save.removeAttribute('disabled');
-        if (ok) {
-          toast(t('ui_sync_config_saved'));
-          render();
-        }
-      });
-      nodes.push(
-        h('h3', null, t('ui_sync_setup_title')),
-        h('p', { class: 'hint' }, t('ui_sync_setup_hint')),
-        field(t('ui_sync_url'), url),
-        field(t('ui_sync_anon_key'), key, t('ui_sync_anon_key_hint')),
-        h('p', { class: 'hint' }, h('a', { href: 'https://github.com/Aphz/moodboard/blob/main/docs/SYNC.md', target: '_blank', rel: 'noreferrer' }, `${t('ui_sync_guide')} (docs/SYNC.md)`)),
-        h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => dialog.close() }, t('ui_close')), save)
-      );
-    } else if (!user) {
-      // ---- 2. sin sesión ----------------------------------------------
-      const mail = h('input', { type: 'email', value: email, placeholder: 'tu@correo.cl', autocomplete: 'email', autocapitalize: 'off', spellcheck: 'false' });
-      mail.addEventListener('input', () => (email = mail.value));
-      const send = h('button', { class: `btn${codeSent ? '' : ' primary'}` }, t('ui_sync_send_code'));
-      send.addEventListener('click', async () => {
-        email = mail.value.trim();
-        if (!email) {
-          toast(t('ui_sync_email_required'), { error: true });
+  /**
+   * Lanza las comprobaciones. `fromInputs` usa lo escrito en el paso 1 y, si
+   * el proyecto responde, lo guarda; si no, comprueba el proyecto guardado.
+   */
+  const runCheck = async (fromInputs: boolean) => {
+    checking = true;
+    build();
+    try {
+      if (fromInputs) {
+        const typed = { url: url.trim(), anonKey: anonKey.trim() };
+        const first = await checkSetup(typed, { data: false });
+        if (first.project.state !== 'ok') {
+          report = first;
           return;
         }
-        send.setAttribute('disabled', '');
-        const ok = await guard(() => sendOtp(email));
-        send.removeAttribute('disabled');
-        if (ok) {
-          codeSent = true;
-          toast(t('ui_sync_code_sent', { email }));
-          render();
+        const same = getSyncConfig()?.url === typed.url.replace(/\/+$/, '') && getSyncConfig()?.anonKey === typed.anonKey;
+        if (!same) {
+          const ok = await guard(() => configureSync(typed));
+          if (!ok) {
+            report = first;
+            return;
+          }
+          toast(t('ui_sync_config_saved'));
+        }
+      }
+      report = await checkSetup(getSyncConfig(), { data: !!getSyncConfig() });
+    } finally {
+      checking = false;
+      build();
+    }
+  };
+
+  // ---- pasos --------------------------------------------------------------
+
+  /** Paso A: URL y clave anon del proyecto. */
+  const stepProject = (): Node[] => {
+    const step = stepOf('project');
+    const urlInput = h('input', {
+      type: 'url',
+      value: url,
+      placeholder: 'https://xxxx.supabase.co',
+      autocomplete: 'off',
+      autocapitalize: 'off',
+      spellcheck: 'false'
+    });
+    urlInput.addEventListener('input', () => (url = urlInput.value));
+    const keyInput = h('input', {
+      type: 'text',
+      value: anonKey,
+      placeholder: 'eyJhbGciOi…',
+      autocomplete: 'off',
+      autocapitalize: 'off',
+      spellcheck: 'false'
+    });
+    keyInput.addEventListener('input', () => (anonKey = keyInput.value));
+    const test = h('button', { class: 'btn primary', disabled: checking }, checking ? t('ui_sync_checking') : t('ui_sync_test'));
+    test.addEventListener('click', () => void runCheck(true));
+    return [
+      h(
+        'div',
+        { class: 'sync-step' },
+        h('h3', null, `${badge(step)} ${t('ui_sync_step_project')}`),
+        h('p', { class: 'hint' }, step.message),
+        field(t('ui_sync_url'), urlInput),
+        field(t('ui_sync_anon_key'), keyInput, t('ui_sync_anon_key_hint')),
+        h('div', { class: 'actions' }, test)
+      )
+    ];
+  };
+
+  /** Paso B: confirmación de correo desactivada. */
+  const stepConfirm = (): Node[] => {
+    const step = stepOf('confirmEmail');
+    const acts: Node[] = [];
+    if (step.state === 'fail') {
+      const open = h('button', { class: 'btn' }, t('ui_sync_open_providers'));
+      open.addEventListener('click', () => openPage(providersUrl(getSyncConfig()?.url ?? url)));
+      const again = h('button', { class: 'btn primary', disabled: checking }, t('ui_sync_recheck'));
+      again.addEventListener('click', () => void runCheck(false));
+      acts.push(h('div', { class: 'actions' }, open, again));
+    }
+    return [
+      h(
+        'div',
+        { class: 'sync-step' },
+        h('h3', null, `${badge(step)} ${t('ui_sync_step_confirm')}`),
+        h('p', { class: 'hint' }, step.message),
+        ...acts
+      )
+    ];
+  };
+
+  /** Paso C: tabla `scenes` y bucket `blobs`. */
+  const stepData = (): Node[] => {
+    const step = stepOf('data');
+    const acts: Node[] = [];
+    if (step.state === 'fail') {
+      const copy = h('button', { class: 'btn primary' }, t('ui_sync_copy_sql'));
+      copy.addEventListener('click', async () => {
+        const ok = await copyText(schemaSql);
+        toast(ok ? t('ui_sync_sql_copied') : t('ui_sync_err_unknown'), { error: !ok, ms: 5000 });
+      });
+      const open = h('button', { class: 'btn' }, t('ui_sync_open_sql'));
+      open.addEventListener('click', () => openPage(sqlEditorUrl(getSyncConfig()?.url ?? url)));
+      // Respaldos para iPad: la hoja de compartir (trae "Copiar") y el SQL en pantalla para copiarlo a mano.
+      const share = h('button', { class: 'btn' }, t('ui_sync_share_sql'));
+      share.addEventListener('click', async () => {
+        const file = new File([schemaSql], 'schema.sql', { type: 'text/plain' });
+        try {
+          if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'schema.sql' });
+          else if (navigator.share) await navigator.share({ text: schemaSql, title: 'schema.sql' });
+          else openPage(SCHEMA_RAW_URL);
+        } catch {
+          /* cancelado */
         }
       });
-      nodes.push(
-        h('p', { class: 'hint' }, t('ui_sync_login_hint')),
-        field(t('ui_sync_email'), mail),
-        codeSent ? null : h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => dialog.close() }, t('ui_close')), send)
+      const view = h('button', { class: 'btn' }, t('ui_sync_show_sql'));
+      const sqlBox = h('textarea', { readonly: true, rows: '10', style: { display: 'none', fontFamily: 'ui-monospace, monospace', fontSize: '12px', marginTop: '8px' } }) as HTMLTextAreaElement;
+      sqlBox.value = schemaSql;
+      view.addEventListener('click', () => {
+        const shown = sqlBox.style.display !== 'none';
+        sqlBox.style.display = shown ? 'none' : 'block';
+        if (!shown) {
+          sqlBox.focus();
+          sqlBox.select();
+        }
+      });
+      const again = h('button', { class: 'btn', disabled: checking }, t('ui_sync_recheck'));
+      again.addEventListener('click', () => void runCheck(false));
+      acts.push(
+        h('p', { class: 'hint' }, t('ui_sync_data_sql_hint')),
+        h('div', { class: 'actions', style: { justifyContent: 'flex-start', flexWrap: 'wrap' } }, copy, share, view, open, again),
+        sqlBox
       );
+    }
+    return [
+      h(
+        'div',
+        { class: 'sync-step' },
+        h('h3', null, `${badge(step)} ${t('ui_sync_step_data')}`),
+        h('p', { class: 'hint' }, step.message),
+        ...acts
+      )
+    ];
+  };
 
-      if (codeSent) {
-        const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456', maxlength: '10' });
-        const enter = h('button', { class: 'btn primary' }, t('ui_sync_login'));
-        enter.addEventListener('click', async () => {
-          enter.setAttribute('disabled', '');
-          const ok = await guard(() => verifyOtp(email, code.value));
-          enter.removeAttribute('disabled');
-          if (ok) {
-            codeSent = false;
-            toast(t('ui_sync_done'));
-            render();
-          }
-        });
-        nodes.push(
-          field(t('ui_sync_code'), code, t('ui_sync_code_sent', { email })),
-          h('div', { class: 'actions' }, send, enter)
-        );
-        setTimeout(() => code.focus(), 30);
+  /** Paso D: cuenta (correo + contraseña) o estado de la sesión. */
+  const stepAccount = (): Node[] => {
+    const user = getSyncUser();
+    const step: SetupStep = user
+      ? { state: 'ok', message: t('ui_sync_account_ok', { email: user.email }) }
+      : authFail
+        ? { state: 'fail', message: authFail.message }
+        : pending(t('ui_sync_account_pending'));
+    const nodes: (Node | null)[] = [h('h3', null, `${badge(step)} ${t('ui_sync_step_account')}`), h('p', { class: 'hint' }, step.message)];
+
+    if (!user) {
+      const mail = h('input', {
+        type: 'email',
+        value: email,
+        placeholder: 'tu@correo.cl',
+        autocomplete: 'email',
+        autocapitalize: 'off',
+        spellcheck: 'false'
+      });
+      mail.addEventListener('input', () => (email = mail.value));
+      const pass = h('input', {
+        type: 'password',
+        value: password,
+        placeholder: '••••••••',
+        autocomplete: 'current-password',
+        minlength: String(MIN_PASSWORD_LENGTH)
+      });
+      pass.addEventListener('input', () => (password = pass.value));
+      const enter = h('button', { class: 'btn primary', disabled: !getSyncConfig() }, t('ui_sync_login'));
+      const doSignIn = async () => {
+        enter.setAttribute('disabled', '');
+        const res = await signIn(email.trim(), password);
+        enter.removeAttribute('disabled');
+        if (res.ok) {
+          authFail = null;
+          password = '';
+          toast(t('ui_sync_done'));
+          await runCheck(false);
+          return;
+        }
+        authFail = res;
+        build();
+      };
+      enter.addEventListener('click', () => void doSignIn());
+      pass.addEventListener('keydown', (e) => {
+        if ((e as KeyboardEvent).key === 'Enter') void doSignIn();
+      });
+      nodes.push(
+        field(t('ui_sync_email'), mail),
+        field(t('ui_sync_password'), pass, t('ui_sync_password_hint')),
+        h('p', { class: 'hint' }, t('ui_sync_login_hint'))
+      );
+      if (authFail?.code === 'confirm-email') {
+        const open = h('button', { class: 'btn' }, t('ui_sync_open_providers'));
+        open.addEventListener('click', () => openPage(providersUrl(getSyncConfig()?.url ?? url)));
+        nodes.push(h('div', { class: 'actions' }, open, enter));
+      } else {
+        nodes.push(h('div', { class: 'actions' }, enter));
       }
-      nodes.push(h('p', { class: 'hint' }, h('button', { class: 'btn small', onclick: () => void disconnect() }, t('ui_sync_disconnect'))));
     } else {
-      // ---- 3. con sesión ----------------------------------------------
       const row = (label: string, value: string) => h('div', { class: 'row' }, h('label', null, label), h('span', null, value));
       const now = h('button', { class: 'btn primary' }, t('ui_sync_now'));
       now.addEventListener('click', async () => {
@@ -251,29 +445,85 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
       const out = h('button', { class: 'btn danger' }, t('ui_sync_signout'));
       out.addEventListener('click', async () => {
         await guard(() => signOut());
-        render();
+        build();
       });
+      const state = getSyncState();
       nodes.push(
         row(t('ui_sync_account'), user.email),
         row(t('ui_sync_status'), syncStateLabel(state)),
         row(t('ui_sync_last'), fmtDate(getLastSync())),
         state === 'error' && getSyncError() ? h('p', { class: 'hint' }, getSyncError()) : null,
-        h('div', { class: 'actions' }, out, h('button', { class: 'btn', onclick: () => dialog.close() }, t('ui_close')), now),
-        h('p', { class: 'hint' }, h('button', { class: 'btn small', onclick: () => void disconnect() }, t('ui_sync_disconnect')))
+        h('div', { class: 'actions' }, out, now)
       );
     }
+    return [h('div', { class: 'sync-step' }, ...nodes.filter((n): n is Node => !!n))];
+  };
 
-    body.replaceChildren(...nodes.filter((n): n is Node => !!n));
+  /** Pie: compartir configuración, guía, desconectar y cerrar. */
+  const footer = (): Node[] => {
+    const nodes: Node[] = [];
+    const cfg = getSyncConfig();
+    if (cfg) {
+      const share = h('button', { class: 'btn' }, t('ui_sync_share'));
+      share.addEventListener('click', async () => {
+        const link = encodeSetupLink(cfg);
+        const nav = navigator as Navigator & { share?: (d: ShareData) => Promise<void> };
+        if (typeof nav.share === 'function') {
+          try {
+            await nav.share({ title: 'Moodboard', url: link });
+            return;
+          } catch {
+            /* el usuario canceló: seguimos copiando */
+          }
+        }
+        const ok = await copyText(link);
+        toast(ok ? t('ui_sync_share_copied') : link, { ms: 6000, error: !ok });
+      });
+      nodes.push(
+        h('div', { class: 'sync-step' }, h('div', { class: 'actions' }, share), h('p', { class: 'hint' }, t('ui_sync_share_hint')))
+      );
+    }
+    nodes.push(
+      h(
+        'p',
+        { class: 'hint' },
+        h(
+          'a',
+          { href: 'https://github.com/Aphz/moodboard/blob/main/docs/SYNC.md', target: '_blank', rel: 'noreferrer' },
+          `${t('ui_sync_guide')} (docs/SYNC.md)`
+        )
+      ),
+      h(
+        'div',
+        { class: 'actions' },
+        cfg ? h('button', { class: 'btn small', onclick: () => void disconnect() }, t('ui_sync_disconnect')) : null,
+        h('button', { class: 'btn', onclick: () => dialog.close() }, t('ui_close'))
+      )
+    );
+    return nodes;
+  };
+
+  const build = () => {
+    phase = currentPhase();
+    body.replaceChildren(
+      h('h2', null, t('ui_sync_title')),
+      h('p', { class: 'hint' }, t('ui_sync_setup_hint')),
+      ...stepProject(),
+      ...stepConfirm(),
+      ...stepData(),
+      ...stepAccount(),
+      ...footer()
+    );
   };
 
   const disconnect = async () => {
     if (!(await confirmDialog(t('ui_sync_disconnect_confirm'), { danger: true }))) return;
     await guard(() => clearSyncConfig());
-    await restart();
-    render();
+    if (app) await initSync(app);
+    report = null;
+    authFail = null;
+    build();
   };
-
-  const render = () => build();
 
   build();
   dialog = showDialog(body, {
@@ -282,10 +532,12 @@ export function showAccountDialog(app: App | null = getSyncApp()): DialogHandle 
       offState = null;
     }
   });
-  // sólo se redibuja si cambió la cara del diálogo (o si muestra estado en vivo)
+  // sólo se redibuja si cambió la cara del diálogo (para no borrar lo escrito)
   offState = onSyncState(() => {
-    if (currentPhase() === phase && phase !== 'account') return;
+    if (currentPhase() === phase) return;
     build();
   });
+  // comprobación automática al abrir, si ya hay proyecto configurado
+  if (getSyncConfig()) void runCheck(false);
   return dialog;
 }
