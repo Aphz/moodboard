@@ -112,6 +112,12 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .row input[type='text'], .row input[type='number'], .row select { width: auto; min-width: 120px; }
 .field { margin: 10px 0; }
 .field label { display: block; margin-bottom: 4px; font-size: 13px; color: var(--fg-muted); }
+.dialog ol.routes { margin: 8px 0 4px; padding-left: 0; list-style: none; counter-reset: route; }
+.dialog ol.routes li { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; line-height: 1.4; }
+.dialog ol.routes .route-icon { flex: none; display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 9px; background: rgba(10, 132, 255, 0.16); color: #4ea1ff; }
+.dialog label.row { cursor: pointer; }
+.dialog label.row input { flex: none; }
+.dialog label.row span { flex: 1; }
 .grid-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .card { background: rgba(127, 127, 127, 0.12); border-radius: 12px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
 .card .thumb { aspect-ratio: 4/3; background: #111 center/cover no-repeat; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); }

@@ -50,9 +50,9 @@ import {
 import { importBlobs, importFiles, importFromUrl, entriesFromDataTransfer } from './features/importImages';
 import { exportSet, renderItemsToBlob, safeFileName, shareOrDownload } from './features/exportImage';
 import { copyBlobToSystemClipboard, copyItems, duplicateItems, hasInternalClip, pasteItems } from './features/clipboard';
-import { exportSceneFile, importSceneFile, sceneFileName } from './features/sceneFile';
+import { exportSceneFile, importSceneFile, inspectZip, sceneFileName } from './features/sceneFile';
 import { findDuplicateGroups, findSimilar } from './features/phash';
-import { isImageFile } from './features/imageTools';
+import { isImageFile, isZipFile } from './features/imageTools';
 import { getBlob } from './core/persistence';
 import { toast, promptDialog, confirmDialog, saveDiscardDialog, closeMenus, clearOverlays } from './ui/dialogs';
 import { showCommandPalette } from './ui/commandPalette';
@@ -62,7 +62,8 @@ import { showScenesDialog } from './ui/scenesDialog';
 import { showManageImages } from './ui/manageImages';
 import { showExportDialog } from './ui/exportDialog';
 import { showCommentDialog, showOpacityDialog, showPaletteDialog, showCanvasColorDialog, showShortcutsDialog } from './ui/itemDialogs';
-import { showAiDescribe, runAiTagging } from './ui/aiDialogs';
+import { showAiDescribe, runAiTagging, showAiOrganize } from './ui/aiDialogs';
+import { showPinterestImport } from './ui/importBoardDialog';
 import { Toolbar } from './ui/toolbar';
 import { HierarchyPanel } from './ui/hierarchy';
 import { SubBar } from './ui/subBar';
@@ -83,6 +84,8 @@ export class App {
   private saving = false;
   private fileInput = document.getElementById('file-input') as HTMLInputElement;
   private pendingImportParent: ItemId | null = null;
+  /** Hasta cuándo (ms) la próxima importación lanza «IA: organizar por categorías». */
+  private organizeAfterImportUntil = 0;
 
   constructor() {
     this.renderer = new Renderer(this.canvas, this.store);
@@ -464,14 +467,50 @@ export class App {
   private async onFileInput() {
     const files = [...(this.fileInput.files ?? [])];
     if (!files.length) return;
-    const sceneFiles = files.filter((f) => /\.moodboard$/i.test(f.name) || f.type === 'application/zip');
-    for (const f of sceneFiles) await this.importSceneFromBlob(f);
-    const imgs = files.filter(isImageFile);
-    if (imgs.length) {
-      const items = await importBlobs(this.store, imgs.map((f) => ({ blob: f, name: f.name })), this.viewCenter(), { parentId: this.pendingImportParent });
+    const entries = files.filter(isImageFile).map((f) => ({ blob: f as Blob, name: f.name }));
+    for (const f of files.filter(isZipFile)) entries.push(...(await this.entriesFromZip(f)));
+    if (entries.length) {
+      const items = await importBlobs(this.store, entries, this.viewCenter(), { parentId: this.pendingImportParent });
       if (items.length) this.gestures.fitSelection();
+      await this.maybeOrganizeAfterImport(items, 2);
     }
     this.pendingImportParent = null;
+  }
+
+  /**
+   * Un `.moodboard` se abre como escena; cualquier otro ZIP aporta sus
+   * imágenes sueltas a la importación en curso.
+   */
+  private async entriesFromZip(f: File): Promise<{ blob: Blob; name: string }[]> {
+    try {
+      const zip = await inspectZip(f);
+      if (zip.isScene) {
+        await this.importSceneFromBlob(f);
+        return [];
+      }
+      if (!zip.images.length) toast(t('ui_zip_empty'), { error: true });
+      else toast(t('ui_zip_imported', { count: zip.images.length }));
+      return zip.images;
+    } catch (e) {
+      toast(`${t('ui_import_error')}: ${e instanceof Error ? e.message : String(e)}`, { error: true });
+      return [];
+    }
+  }
+
+  /**
+   * Deja programada (o cancela) la organización con IA para la próxima
+   * importación; caduca a los 15 minutos por si el usuario cambia de idea.
+   */
+  armOrganizeAfterImport(on: boolean) {
+    this.organizeAfterImportUntil = on ? Date.now() + 15 * 60_000 : 0;
+  }
+
+  /** Lanza «IA: organizar» sobre lo recién importado si estaba programado. */
+  private async maybeOrganizeAfterImport(items: ImageItem[], min: number) {
+    if (!this.organizeAfterImportUntil || Date.now() > this.organizeAfterImportUntil) return;
+    if (items.length < min) return;
+    this.organizeAfterImportUntil = 0;
+    await showAiOrganize(this, items);
   }
 
   async importSceneFromBlob(blob: Blob) {
@@ -569,11 +608,13 @@ export class App {
       const r = this.canvas.getBoundingClientRect();
       const pos = screenToScene(this.store.scene.viewport, { x: e.clientX - r.left, y: e.clientY - r.top });
       const files = [...e.dataTransfer.files];
-      const sceneFiles = files.filter((f) => /\.moodboard$/i.test(f.name));
-      for (const f of sceneFiles) await this.importSceneFromBlob(f);
       const { blobs, urls, text } = await entriesFromDataTransfer(e.dataTransfer);
-      if (blobs.length) await importBlobs(this.store, blobs, pos);
-      else if (urls.length) for (const u of urls.slice(0, 10)) await importFromUrl(this.store, u, pos);
+      for (const f of files.filter(isZipFile)) blobs.push(...(await this.entriesFromZip(f)));
+      if (blobs.length) {
+        const items = await importBlobs(this.store, blobs, pos);
+        // al arrastrar pines de uno en uno no molesta; con tres o más ya organiza
+        await this.maybeOrganizeAfterImport(items, 3);
+      } else if (urls.length) for (const u of urls.slice(0, 10)) await importFromUrl(this.store, u, pos);
       else if (text.trim()) this.createNote(pos, text.trim());
     });
   }
@@ -673,6 +714,7 @@ export class App {
           if (u) await importFromUrl(S, u.trim(), this.viewCenter());
         }
       },
+      { id: 'import_pinterest', title: 'cmd_import_pinterest', category: 'file', icon: 'pin', run: () => showPinterestImport(this) },
       { id: 'export_png', title: 'cmd_export_png', category: 'file', icon: 'export', shortcut: 'Mod+E', run: () => showExportDialog(this, 'scene') },
       { id: 'export_selection_png', title: 'cmd_export_selection_png', category: 'file', icon: 'export', shortcut: 'Mod+Shift+E', enabled: hasSel, run: () => showExportDialog(this, 'selection') },
       {
@@ -816,6 +858,7 @@ export class App {
       // IA / análisis
       { id: 'ai_describe', title: 'cmd_ai_describe', category: 'ai', icon: 'sparkles', run: () => showAiDescribe(this) },
       { id: 'ai_tag', title: 'cmd_ai_tag', category: 'ai', icon: 'tag', enabled: hasImg, run: () => runAiTagging(this) },
+      { id: 'ai_organize', title: 'cmd_ai_organize', category: 'ai', icon: 'sparkles', enabled: () => S.scene.items.filter((i) => i.kind === 'image').length >= 2, run: () => showAiOrganize(this) },
       { id: 'ai_find_similar', title: 'cmd_ai_find_similar', category: 'ai', icon: 'similar', enabled: oneImg, run: () => this.findSimilarToSelection() },
       { id: 'find_duplicates', title: 'cmd_find_duplicates', category: 'ai', icon: 'similar', run: () => this.findDuplicates() }
     ];

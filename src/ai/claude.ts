@@ -43,6 +43,15 @@ export const MAX_TOKENS_TAG = 400;
 /** Tope de salida al sugerir agrupaciones (JSON corto). */
 export const MAX_TOKENS_ARRANGE = 600;
 
+/** Tope de salida por lote al clasificar en categorías (JSON corto). */
+export const MAX_TOKENS_CLASSIFY = 500;
+
+/** Máximo de categorías que la IA puede proponer por sí sola. */
+export const MAX_AD_HOC_CATEGORIES = 7;
+
+/** Categoría de respaldo para lo que no encaja en ninguna otra. */
+export const OTHER_CATEGORY: Record<AiLang, string> = { es: 'Otros', en: 'Other' };
+
 /** Idiomas soportados por los prompts. */
 export type AiLang = 'es' | 'en';
 
@@ -329,6 +338,23 @@ function normalizeTag(t: unknown): string | null {
   return s ? s : null;
 }
 
+/**
+ * Normaliza el nombre de una categoría: sin `#`, espacios repetidos ni punto
+ * final, con mayúscula inicial y como mucho 40 caracteres.
+ */
+export function normalizeCategory(c: unknown): string | null {
+  if (typeof c !== 'string') return null;
+  const s = c.trim().replace(/^#+\s*/, '').replace(/\s+/g, ' ').replace(/[.:]+$/, '').trim().slice(0, 40);
+  if (!s) return null;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Busca `name` en `list` sin distinguir mayúsculas; devuelve el nombre canónico. */
+function findCategory(list: string[], name: string): string | null {
+  const lower = name.toLowerCase();
+  return list.find((c) => c.toLowerCase() === lower) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Funciones de alto nivel
 //
@@ -443,4 +469,102 @@ export async function suggestArrangement(input: {
     if (title && ids.length) groups.push({ title, ids });
   }
   return { result: { groups }, usage: res.usage };
+}
+
+/** Resultado de `classifyImages`: categorías en orden y a cuál va cada imagen. */
+export interface ClassifyResult {
+  /** Categorías finales, en orden de aparición (la de respaldo va al final). */
+  categories: string[];
+  /** `{ id: categoría }` para cada imagen recibida. */
+  assignments: Record<string, string>;
+}
+
+/**
+ * Clasifica imágenes en categorías, en lotes secuenciales de 20.
+ *
+ * - Con `categories` (p. ej. «Poses, Texturas, Ropa») cada imagen va a una de
+ *   ellas o, si no encaja, a la de respaldo (`OTHER_CATEGORY`).
+ * - Sin `categories`, el primer lote pide a la IA que proponga entre 3 y
+ *   `MAX_AD_HOC_CATEGORIES` categorías cortas adecuadas al tablero; los lotes
+ *   siguientes reutilizan esas y sólo pueden añadir una nueva si sobra cupo.
+ *
+ * Es la función más barata de la capa IA por imagen: pensada para miniaturas de
+ * 256 px (≈ 90 tokens cada una) y una salida JSON corta.
+ */
+export async function classifyImages(input: {
+  images: { id: string; name: string; jpegBase64: string }[];
+  categories: string[];
+  lang: AiLang;
+}): Promise<{ result: ClassifyResult; usage: AiUsage }> {
+  const other = OTHER_CATEGORY[input.lang];
+  const fixed: string[] = [];
+  for (const c of input.categories) {
+    const n = normalizeCategory(c);
+    if (n && !findCategory(fixed, n) && n.toLowerCase() !== other.toLowerCase()) fixed.push(n);
+  }
+  const adHoc = fixed.length === 0;
+  const known: string[] = [...fixed];
+  const assignments: Record<string, string> = {};
+  let usedOther = false;
+  let usage = emptyUsage();
+
+  const system =
+    `Eres director de arte y ordenas referencias visuales de un moodboard. ${baseRules(input.lang)} ` +
+    'Cada imagen va a exactamente una categoría. Devuelve sólo JSON con esta forma: ' +
+    '{ "categories": ["..."], "assignments": { "<id>": "<categoría>" } }.';
+
+  for (const batch of chunk(input.images, MAX_IMAGES)) {
+    const content: ContentBlock[] = [];
+    for (const img of batch) {
+      content.push({ type: 'text', text: `id: ${img.id} — nombre: ${img.name}` });
+      content.push(imageBlock(img.jpegBase64));
+    }
+    let instruction: string;
+    if (!adHoc) {
+      instruction =
+        `Categorías permitidas: ${known.join(', ')}. Asigna cada imagen a una de ellas; ` +
+        `si ninguna encaja de verdad, usa "${other}".`;
+    } else if (known.length === 0) {
+      instruction =
+        `Propón entre 3 y ${MAX_AD_HOC_CATEGORIES} categorías cortas (1 a 3 palabras) que dividan este ` +
+        'tablero de forma útil para trabajar (por ejemplo poses, texturas, ropa, paleta, entorno, ' +
+        'tipografía) y asigna cada imagen a una. Prefiere pocas categorías claras a muchas vagas.';
+    } else {
+      instruction =
+        `Categorías ya definidas: ${known.join(', ')}. Usa esas. Sólo si una imagen claramente no ` +
+        `encaja en ninguna, crea una categoría nueva corta (máximo ${MAX_AD_HOC_CATEGORIES} en total) ` +
+        `o usa "${other}".`;
+    }
+    content.push({ type: 'text', text: `${instruction} Identificadores: ${batch.map((i) => i.id).join(', ')}.` });
+
+    const res = await callClaude({ system, content, maxTokens: MAX_TOKENS_CLASSIFY, json: true });
+    usage = addUsage(usage, res.usage);
+    const parsed = parseJsonLoose(res.text) as { categories?: unknown; assignments?: unknown };
+
+    // categorías nuevas (sólo en modo ad hoc y mientras quede cupo)
+    if (adHoc && Array.isArray(parsed.categories)) {
+      for (const raw of parsed.categories) {
+        const n = normalizeCategory(raw);
+        if (!n || findCategory(known, n) || n.toLowerCase() === other.toLowerCase()) continue;
+        if (known.length < MAX_AD_HOC_CATEGORIES) known.push(n);
+      }
+    }
+    const rawAssign =
+      parsed.assignments && typeof parsed.assignments === 'object' ? (parsed.assignments as Record<string, unknown>) : {};
+    for (const img of batch) {
+      const n = normalizeCategory(rawAssign[img.id]);
+      let cat = n ? findCategory(known, n) : null;
+      if (!cat && n && adHoc && n.toLowerCase() !== other.toLowerCase() && known.length < MAX_AD_HOC_CATEGORIES) {
+        known.push(n);
+        cat = n;
+      }
+      if (!cat) {
+        cat = other;
+        usedOther = true;
+      }
+      assignments[img.id] = cat;
+    }
+  }
+
+  return { result: { categories: usedOther ? [...known, other] : known, assignments }, usage };
 }

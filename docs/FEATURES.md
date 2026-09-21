@@ -39,6 +39,8 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 |---|---|---|
 | Importar archivos | ✅ | `import_images` `Mod+I` (también desde el botón ＋) |
 | Importar desde URL | ✅ | `import_url`; valida que la respuesta sea `image/*` |
+| Importar un tablero de Pinterest | 🟡 | `import_pinterest`: guía las tres vías que funcionan sin servidor (arrastre en Split View, Fotos, ZIP) y encadena `ai_organize`. El CDN de Pinterest no envía CORS, así que no se descarga por URL. Ver `docs/PINTEREST.md` |
+| Importar un ZIP de imágenes sueltas | ✅ | `inspectZip()`: si el ZIP no trae `scene.json` se importan sus imágenes (ignora `__MACOSX` y ocultos) |
 | Pegar desde el portapapeles | ✅ | `paste` `Mod+V`; imagen, URL o texto (crea nota) |
 | Arrastrar y soltar desde el navegador | ✅ | `dragenter/drop` en `src/app.ts`; archivos, URLs y texto |
 | Ajustar posición de lo soltado a la cuadrícula (beta4) | ✅ | La colocación pasa por `snapToGrid` cuando el ajuste está activo |
@@ -175,7 +177,7 @@ Cosas que esta app hace y PureRef no:
 - **Paleta de color automática.** Cada imagen guarda su paleta dominante al importarse (mean-cut + fusión perceptual ΔE76 en CIE-Lab, `src/features/palette.ts`). Se puede ver con `extract_palette`, copiar los hex e insertar una nota de paleta con `add_palette_note`.
 - **Hash perceptual para duplicados y similares.** dHash de 64 bits por imagen (`src/features/phash.ts`): `find_duplicates` selecciona los grupos con similitud ≥ 0,92 y `ai_find_similar` encuentra parecidos ≥ 0,8 al ítem seleccionado. Es local, instantáneo y no usa red ni IA.
 - **Organizar por color.** `arrange_by_color` ordena por tono a partir del color dominante y deja al final lo que no tiene tono (grises, notas, dibujos).
-- **IA opcional con tu propia clave.** `ai_describe` resume el tablero en markdown (y lo inserta como nota si quieres); `ai_tag` etiqueta las imágenes seleccionadas en un solo paso de deshacer. Modelo por defecto `claude-sonnet-5`, clave guardada solo en el dispositivo.
+- **IA opcional con tu propia clave.** `ai_describe` resume el tablero en markdown (y lo inserta como nota si quieres); `ai_tag` etiqueta las imágenes seleccionadas en un solo paso de deshacer; `ai_organize` clasifica las imágenes por categorías (las tuyas o las que proponga la IA) y las recoloca en bloques con grupo y título (`src/features/organize.ts`), también en un solo paso de deshacer. Modelo por defecto `claude-haiku-4-5`, clave guardada solo en el dispositivo.
 - **Apple Pencil con presión.** El grosor del trazo sigue `pointer.pressure`; el dedo mantiene el paneo mientras el lápiz dibuja. Configurable en Ajustes.
 - **Compartir con la hoja nativa de iOS.** Exportar PNG/JPEG o `.moodboard` abre el *share sheet* (`navigator.share` con archivos) para mandarlo a Fotos, Archivos, Mensajes o cualquier app; en escritorio cae a descarga.
 - **PWA offline.** Service worker con Workbox y `autoUpdate`: la app arranca sin conexión, avisa cuando hay versión nueva y pide almacenamiento persistente para que iOS no purgue los datos.

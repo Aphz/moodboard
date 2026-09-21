@@ -17,6 +17,7 @@
  * que ya existen en IndexedDB.
  */
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
+import { isImageName } from './imageTools';
 import {
   descendantsOf,
   itemBounds,
@@ -84,6 +85,36 @@ export function blobToU8(blob: Blob): Promise<Uint8Array> {
     fr.onerror = () => reject(new Error('No se pudo leer el archivo'));
     fr.readAsArrayBuffer(blob);
   });
+}
+
+/**
+ * Mira dentro de un ZIP cualquiera: si trae `scene.json` es un `.moodboard`;
+ * si no, devuelve las imágenes que contenga (ignorando carpetas, `__MACOSX` y
+ * archivos ocultos) listas para `importBlobs`. Así se puede importar un ZIP
+ * de imágenes sueltas, como la exportación de un tablero de otra app.
+ *
+ * @throws Error si el archivo no es un ZIP legible.
+ */
+export async function inspectZip(file: Blob): Promise<{ isScene: boolean; images: { blob: Blob; name: string }[] }> {
+  const bytes = await blobToU8(file);
+  let entries: Record<string, Uint8Array>;
+  try {
+    entries = unzipSync(bytes);
+  } catch {
+    throw new Error('No se pudo abrir el ZIP');
+  }
+  if (entries[SCENE_ENTRY]) return { isScene: true, images: [] };
+  const images: { blob: Blob; name: string }[] = [];
+  for (const [path, data] of Object.entries(entries)) {
+    if (path.endsWith('/') || !data.length) continue;
+    if (path.startsWith('__MACOSX/') || path.includes('/__MACOSX/')) continue;
+    const name = path.split('/').pop() ?? path;
+    if (name.startsWith('.') || !isImageName(name)) continue;
+    const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+    images.push({ blob: new Blob([data as unknown as BlobPart], { type: extToMime(ext) }), name });
+  }
+  images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return { isScene: false, images };
 }
 
 /** Nombre de archivo saneado para una escena, con extensión `.moodboard`. */

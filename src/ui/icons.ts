@@ -59,6 +59,7 @@ export const icons: Record<string, string> = {
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>',
   drawing: '<path d="M3 17c4-8 8 8 12 0s4-4 6-2"/>',
   tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/>',
+  pin: '<path d="M9 4h6l-1 6 3 3v2H7v-2l3-3z"/><path d="M12 15v6"/>',
   similar: '<circle cx="8" cy="8" r="5"/><circle cx="16" cy="16" r="5"/>',
   keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/>',
   parent: '<path d="M12 4v6M8 14l4-4 4 4"/><rect x="4" y="14" width="16" height="6" rx="1"/>',
