@@ -106,6 +106,14 @@ export const es = {
   cmd_ornaments: 'Símbolos y ornamentos…',
   cmd_connect: 'Conectar con flecha',
   cmd_find_duplicates: 'Buscar duplicados',
+  // Arrastrar entre categorías
+  ui_drop_into: 'Soltar en «{name}»',
+  ui_drop_attach: 'Adjuntar a «{name}»',
+  ui_drop_out: 'Sacar de «{name}»',
+  ui_drop_group_unnamed: 'grupo',
+  ui_moved_into: 'Ahora en «{name}»',
+  ui_moved_attach: 'Adjuntado a «{name}»',
+  ui_moved_out: 'Fuera de «{name}»',
   // UI general
   ui_search: 'Buscar…',
   ui_search_commands: 'Buscar comando…',

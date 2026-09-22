@@ -30,7 +30,7 @@ import { appSettings, loadAppSettings, updateAppSettings, onSettingsChange } fro
 import { deleteScene, getKV, listScenes, loadScene, putBlob, requestPersistence, saveScene, setKV } from './core/persistence';
 import { Renderer, renderToCanvas, screenToScene, strokesBounds } from './render/renderer';
 import { onBitmapReady, ensureBitmaps } from './render/imageCache';
-import { GestureController, type Tool } from './input/gestures';
+import { GestureController, type ReparentInfo, type Tool } from './input/gestures';
 import { t, setLanguage, detectLanguage } from './i18n';
 import {
   alignItems,
@@ -99,7 +99,8 @@ export class App {
       onEditItem: (id) => this.editItem(id),
       onStrokeEnd: (s, o) => this.commitStroke(s, o),
       onCropChange: () => this.renderer.requestDraw(),
-      onToolChange: (tool) => this.onToolChange(tool)
+      onToolChange: (tool) => this.onToolChange(tool),
+      onReparent: (info) => this.onReparent(info)
     });
   }
 
@@ -367,6 +368,20 @@ export class App {
     this.exitCrop();
     if (this.gestures.tool === 'draw') this.gestures.setTool('select');
     closeMenus();
+  }
+
+  /**
+   * Un arrastre cambió de grupo lo que se movía. Se dice qué pasó y se ofrece
+   * deshacerlo ahí mismo: sin esto, la imagen «se va» a otra categoría y no
+   * queda claro cómo devolverla.
+   */
+  private onReparent(info: ReparentInfo) {
+    const key = info.kind === 'into' ? 'ui_moved_into' : info.kind === 'attach' ? 'ui_moved_attach' : 'ui_moved_out';
+    const suffix = info.count > 1 ? ` · ${info.count}` : '';
+    toast(t(key, { name: info.name }) + suffix, {
+      ms: 6000,
+      action: { label: t('cmd_undo'), run: () => this.store.undo() }
+    });
   }
 
   private onToolChange(tool: Tool) {

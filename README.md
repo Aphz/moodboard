@@ -105,6 +105,7 @@ que PureRef 2.1.
 - **Organizar**: collage en columnas (las apaisadas a doble ancho, con el aire que elijas), óptimo (empaquetado por estanterías), cuadrícula, fila, columna, aleatorio y por color; normalizar tamaño y área; alinear, distribuir y apilar.
 - **Símbolos, ornamentos y conectores**: signos sueltos acordes al mood del tablero, puestos en los claros sin tapar imágenes, y flechas entre referencias. Funciona sin clave API; con ella, la IA propone el mood y su repertorio.
 - **Encuadre a prueba de rotaciones**: el ajuste respeta las barras flotantes y el área segura, y al girar el dispositivo el tablero no se va a una esquina — si lo veías completo, lo sigues viendo completo; si estabas con zoom en un detalle, se respeta.
+- **Selección pensada para tableros con grupos**: tocar una imagen la selecciona a ella, volver a tocarla selecciona su categoría, y arrastrar mueve lo que tocaste. Al soltar sobre otra categoría se ve el destino resaltado con su nombre, y el aviso trae **Deshacer**.
 - **Historial** por instantáneas con transacciones: un gesto completo es un solo paso de deshacer (`⌘Z` / `⌘⇧Z`).
 - **Escenas** múltiples con miniaturas y recientes; guardado automático cada 5 s (configurable).
 - **Exportar** el tablero o la selección como PNG/JPEG (con o sin hijos, escala y fondo a elección) y compartir con la hoja nativa de iOS; exportar/importar el formato abierto `.moodboard`.

@@ -1,0 +1,124 @@
+/**
+ * Pruebas de la regla de selección con grupos (src/features/selection.ts):
+ * tocar una imagen dentro de un grupo la selecciona a ella, y volver a tocarla
+ * sube al grupo. Es lo que permite mover una sola imagen de categoría.
+ */
+import { describe, expect, it } from 'vitest';
+import { createGroupItem, createImageItem, createNoteItem, type Item, type ItemId } from '../src/core/model';
+import { ancestorChain, dropTarget, remainingBounds, selectionTarget } from '../src/features/selection';
+
+/** Escena de prueba: un grupo «Poses» dentro de un grupo «Tablero». */
+const tablero = createGroupItem({ id: 'g_tablero', name: 'Tablero' });
+const poses = createGroupItem({ id: 'g_poses', name: 'Poses', parentId: 'g_tablero' });
+const foto = createImageItem('b1', 200, 300, { id: 'im_foto', name: 'foto', parentId: 'g_poses' });
+const suelta = createImageItem('b2', 200, 300, { id: 'im_suelta', name: 'suelta' });
+const nota = createNoteItem('hola', { id: 'n_1', parentId: 'im_foto' });
+
+const items: Item[] = [tablero, poses, foto, suelta, nota];
+const byId = new Map(items.map((i) => [i.id, i]));
+const get = (id: ItemId) => byId.get(id);
+
+const chainOf = (it: Item) => ancestorChain(it, get);
+
+describe('ancestorChain', () => {
+  it('va del ítem hacia la raíz', () => {
+    expect(chainOf(foto).map((i) => i.id)).toEqual(['im_foto', 'g_poses', 'g_tablero']);
+    expect(chainOf(suelta).map((i) => i.id)).toEqual(['im_suelta']);
+    expect(chainOf(nota).map((i) => i.id)).toEqual(['n_1', 'im_foto', 'g_poses', 'g_tablero']);
+  });
+
+  it('no se cuelga si un archivo trae un ciclo', () => {
+    const a = createGroupItem({ id: 'a', parentId: 'b' });
+    const b = createGroupItem({ id: 'b', parentId: 'a' });
+    const local = new Map([
+      ['a', a as Item],
+      ['b', b as Item]
+    ]);
+    expect(ancestorChain(a, (id) => local.get(id)).map((i) => i.id)).toEqual(['a', 'b']);
+  });
+
+  it('corta si falta el padre', () => {
+    const huerfano = createImageItem('b3', 10, 10, { id: 'im_x', parentId: 'no_existe' });
+    expect(chainOf(huerfano).map((i) => i.id)).toEqual(['im_x']);
+  });
+});
+
+describe('selectionTarget', () => {
+  it('el primer toque selecciona la imagen, no el grupo', () => {
+    expect(selectionTarget(chainOf(foto), new Set())?.id).toBe('im_foto');
+  });
+
+  it('volver a tocarla sube al grupo que la contiene', () => {
+    expect(selectionTarget(chainOf(foto), new Set(['im_foto']))?.id).toBe('g_poses');
+  });
+
+  it('y el toque siguiente sube al grupo de más afuera', () => {
+    expect(selectionTarget(chainOf(foto), new Set(['im_foto', 'g_poses']))?.id).toBe('g_tablero');
+  });
+
+  it('con el grupo seleccionado, tocar dentro vuelve a la imagen', () => {
+    expect(selectionTarget(chainOf(foto), new Set(['g_poses']))?.id).toBe('im_foto');
+  });
+
+  it('si ya está todo seleccionado se queda la hoja', () => {
+    const todo = new Set(['im_foto', 'g_poses', 'g_tablero']);
+    expect(selectionTarget(chainOf(foto), todo)?.id).toBe('im_foto');
+  });
+
+  it('una imagen sin grupo se selecciona ella misma siempre', () => {
+    expect(selectionTarget(chainOf(suelta), new Set())?.id).toBe('im_suelta');
+    expect(selectionTarget(chainOf(suelta), new Set(['im_suelta']))?.id).toBe('im_suelta');
+  });
+
+  it('una nota colgada de una imagen sube al grupo, no a la imagen', () => {
+    // la imagen no es grupo: tocar dos veces la nota no selecciona la imagen
+    expect(selectionTarget(chainOf(nota), new Set(['n_1']))?.id).toBe('g_poses');
+  });
+
+  it('sin cadena no hay nada que seleccionar', () => {
+    expect(selectionTarget([], new Set())).toBeNull();
+  });
+});
+
+describe('dropTarget', () => {
+  it('soltar sobre una imagen de un grupo mete en ese grupo, no en el de más afuera', () => {
+    expect(dropTarget(chainOf(foto), new Set())?.id).toBe('g_poses');
+  });
+
+  it('una imagen sin grupo sirve de percha para notas y dibujos', () => {
+    expect(dropTarget(chainOf(suelta), new Set())?.id).toBe('im_suelta');
+  });
+
+  it('nada que cuelgue de lo que se mueve sirve de destino', () => {
+    // arrastrando «Poses» completo, ni él ni lo que hay dentro son destino
+    expect(dropTarget(chainOf(foto), new Set(['g_poses']))).toBeNull();
+    expect(dropTarget(chainOf(foto), new Set(['im_foto']))).toBeNull();
+    expect(dropTarget(chainOf(suelta), new Set(['im_suelta']))).toBeNull();
+  });
+
+  it('sin cadena no hay destino', () => {
+    expect(dropTarget([], new Set())).toBeNull();
+  });
+});
+
+describe('remainingBounds', () => {
+  const uno = createImageItem('b', 100, 100, { id: 'x1', x: 0, y: 0, parentId: 'g' });
+  const dos = createImageItem('b', 100, 100, { id: 'x2', x: 300, y: 0, parentId: 'g' });
+  const grupito = createGroupItem({ id: 'sub', parentId: 'g' });
+  const oculta = createImageItem('b', 100, 100, { id: 'x3', x: 900, y: 0, parentId: 'g', visible: false });
+
+  it('mide sólo lo que se queda', () => {
+    const b = remainingBounds([uno, dos, grupito, oculta], new Set(['x1']))!;
+    expect(b).toEqual({ x: 250, y: -50, w: 100, h: 100 });
+  });
+
+  it('descarta grupos e invisibles', () => {
+    const b = remainingBounds([uno, grupito, oculta], new Set())!;
+    expect(b).toEqual({ x: -50, y: -50, w: 100, h: 100 });
+  });
+
+  it('sin nada que quede devuelve null: el grupo se quedaría vacío', () => {
+    expect(remainingBounds([uno, dos], new Set(['x1', 'x2']))).toBeNull();
+    expect(remainingBounds([], new Set())).toBeNull();
+  });
+});

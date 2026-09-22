@@ -42,6 +42,8 @@ export interface Overlay {
   lasso: Rect | null;
   /** ítem resaltado (hover / arrastre hacia grupo) */
   hoverId: string | null;
+  /** qué va a pasar al soltar, para decirlo con palabras sobre el destino */
+  hoverLabel: string | null;
   /** modo recorte activo sobre este ítem */
   cropId: string | null;
   /** trazo en curso (coordenadas de escena) */
@@ -65,7 +67,15 @@ export class Renderer {
   width = 0;
   height = 0;
   dpr = 1;
-  overlay: Overlay = { lasso: null, hoverId: null, cropId: null, liveStroke: null, hideGizmo: false, interacting: false };
+  overlay: Overlay = {
+    lasso: null,
+    hoverId: null,
+    hoverLabel: null,
+    cropId: null,
+    liveStroke: null,
+    hideGizmo: false,
+    interacting: false
+  };
   private raf = 0;
   /** sombras suaves bajo los ítems (se apagan durante pan/zoom y en escenas muy grandes) */
   private shadows = true;
@@ -146,12 +156,20 @@ export class Renderer {
       const b = subtreeBounds(scene, this.overlay.hoverId);
       if (b) {
         const s = this.rectToScreen(b);
+        // zona de destino: relleno tenue además del contorno, para que se lea
+        // como «aquí cae» y no como un recuadro suelto
+        ctx.fillStyle = 'rgba(255,204,0,0.12)';
+        ctx.fillRect(s.x, s.y, s.w, s.h);
         ctx.strokeStyle = '#ffcc00';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
         ctx.strokeRect(s.x, s.y, s.w, s.h);
         ctx.setLineDash([]);
+        if (this.overlay.hoverLabel) this.drawDropLabel(this.overlay.hoverLabel, s);
       }
+    } else if (this.overlay.hoverLabel) {
+      // sin destino: el aviso va arriba al centro (por ejemplo «sacar del grupo»)
+      this.drawDropLabel(this.overlay.hoverLabel, { x: 0, y: 8, w: this.width, h: 0 });
     }
     if (this.overlay.lasso) {
       const l = this.overlay.lasso;
@@ -475,6 +493,38 @@ export class Renderer {
     ctx.rect(cx - w / 2 + padX / 2, y, w - padX, h);
     ctx.clip();
     ctx.fillText(text, cx, y + h / 2);
+    ctx.restore();
+    ctx.restore();
+  }
+
+  /**
+   * Rótulo de lo que va a pasar al soltar, sobre la zona de destino. En
+   * píxeles de pantalla, como el nombre del grupo, y nunca se exporta.
+   */
+  private drawDropLabel(text: string, s: Rect) {
+    const label = (text ?? '').trim();
+    if (!label || this.exporting) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = '600 13px system-ui, -apple-system, "Helvetica Neue", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const padX = 10;
+    const h = 24;
+    const w = Math.min(ctx.measureText(label).width + padX * 2, Math.max(60, this.width - 16));
+    const cx = Math.min(Math.max(s.x + s.w / 2, w / 2 + 8), Math.max(w / 2 + 8, this.width - w / 2 - 8));
+    const above = s.y - h - 8;
+    const y = above >= 8 ? above : Math.min(s.y + 8, this.height - h - 8);
+    ctx.beginPath();
+    roundRect(ctx, cx - w / 2, y, w, h, 12);
+    ctx.fillStyle = 'rgba(255,204,0,0.95)';
+    ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - w / 2 + padX / 2, y, w - padX, h);
+    ctx.clip();
+    ctx.fillText(label, cx, y + h / 2);
     ctx.restore();
     ctx.restore();
   }

@@ -109,6 +109,14 @@ export const en: Record<keyof typeof es, string> = {
   cmd_connect: 'Connect with an arrow',
   cmd_find_duplicates: 'Find duplicates',
   // general UI
+  // Dragging between categories
+  ui_drop_into: 'Drop into «{name}»',
+  ui_drop_attach: 'Attach to «{name}»',
+  ui_drop_out: 'Take out of «{name}»',
+  ui_drop_group_unnamed: 'group',
+  ui_moved_into: 'Now in «{name}»',
+  ui_moved_attach: 'Attached to «{name}»',
+  ui_moved_out: 'Out of «{name}»',
   ui_search: 'Search…',
   ui_search_commands: 'Search commands…',
   ui_no_results: 'No results',
