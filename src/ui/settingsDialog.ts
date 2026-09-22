@@ -49,6 +49,8 @@ export function showSettingsDialog(app: App) {
   const gridColor = h('input', { type: 'color', value: S.scene.settings.grid.color });
   gridColor.addEventListener('input', () => S.updateSettings((s) => (s.grid.color = gridColor.value)));
 
+  /** Bajas de los oyentes que registren los bloques, al cerrar el diálogo. */
+  const cleanups: Array<() => void> = [];
   const content = [
     h('h2', null, t('ui_settings')),
     row(t('ui_language'), select(a.language, [['es', 'Español'], ['en', 'English']], (v) => void app.setLanguage(v as 'es' | 'en'))),
@@ -75,7 +77,7 @@ export function showSettingsDialog(app: App) {
       h('label', null, `${syncStateLabel(getSyncState())}${getSyncUser()?.email ? ' · ' + getSyncUser()!.email : ''}`),
       h('button', { class: 'btn small', onclick: () => { d.close(); showAccountDialog(app); } }, t('ui_sync_open_account'))
     ),
-    renderAiSettings(),
+    renderAiSettings((off) => cleanups.push(off)),
     h('h3', null, t('ui_storage')),
     storage,
     h('div', { class: 'row' }, gcBtn, persistBtn),
@@ -84,5 +86,5 @@ export function showSettingsDialog(app: App) {
     h('p', { class: 'hint' }, t('ui_install_hint')),
     h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => d.close() }, t('ui_close')))
   ];
-  const d = showDialog(content);
+  const d = showDialog(content, { onClose: () => { for (const off of cleanups) off(); } });
 }

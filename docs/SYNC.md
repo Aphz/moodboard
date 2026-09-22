@@ -30,8 +30,9 @@ dos subcarpetas:
 
 ```
 Moodboard/
-├── scenes/   un archivo .json por tablero
-└── blobs/    las imágenes, una sola vez cada una
+├── scenes/       un archivo .json por tablero
+├── blobs/        las imágenes, una sola vez cada una
+└── ajustes.json  sólo si activas «guardar la clave API en mi Drive»
 ```
 
 Puedes mirarla, pero no hace falta que toques nada. Si borras la carpeta a
@@ -40,6 +41,22 @@ lo que tenga guardado en el dispositivo.
 
 **Moodboard no puede ver el resto de tu Drive.** El permiso que pide
 (`drive.file`) solo alcanza a los archivos que la propia app crea.
+
+### Guardar la clave de la IA en tu Drive (opcional)
+
+En Ajustes, junto al campo de la clave API, hay una casilla **«Guardar la clave
+en mi Google Drive»**. Viene apagada. Si la activas:
+
+- La clave queda en `Moodboard/ajustes.json`, dentro de tu propia carpeta.
+- Aparece sola en tus otros dispositivos al sincronizar, y vuelve si el
+  navegador borra los datos del sitio (a Safari le pasa).
+- Deja de estar sólo en este equipo: **quien tenga acceso a esa carpeta de tu
+  Drive puede leerla**, y es una credencial que se cobra a tu cuenta de
+  Anthropic. Si la compartes con alguien, no actives esto.
+
+Al desactivar la casilla —o al usar *Quitar clave*— el archivo se borra de tu
+Drive. Si un dispositivo no tiene clave y en Drive hay una, la adopta sin
+preguntar: es justo lo que hace que no tengas que crear otra.
 
 ### Qué pasa sin conexión
 
@@ -198,6 +215,12 @@ tiene prioridad.
   imagen se sube una sola vez y nunca hay conflictos.
 - **Subidas**: `multipart` en un solo viaje (`POST` para crear, `PATCH` sobre
   el mismo endpoint de subida para actualizar).
+- **Clave API en Drive** (opcional, `appSettings.aiKeyInDrive`): un
+  `ajustes.json` en la raíz de `Moodboard/` con
+  `appProperties: { kind: 'settings' }`. Tras cada sincronización completa,
+  `syncApiKey()` sube la clave si la opción está activa, o la adopta si este
+  dispositivo no tiene ninguna y la de Drive tiene forma de clave
+  (`isApiKeyLike`). Nunca propaga errores: si Drive falla, la app sigue igual.
 - **Fusión**: al comparar `modifiedTime` con lo anotado en la última
   sincronización, si cambiaron los dos lados se llama a `mergeScenes`
   (`src/sync/merge.ts`): por ítem gana el `mtime` mayor y los borrados viajan

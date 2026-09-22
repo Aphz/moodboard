@@ -12,7 +12,13 @@
  * Moodboard/
  *   scenes/   <sceneId>.json   appProperties: { kind: 'scene', sceneId, updatedAt }
  *   blobs/    <blobId>.<ext>   appProperties: { kind: 'blob',  blobId }
+ *   ajustes.json               appProperties: { kind: 'settings' }
  * ```
+ *
+ * `ajustes.json` sólo existe si el usuario activa «guardar la clave API en mi
+ * Drive»: es su cuenta y su carpeta, y le ahorra crear una clave nueva en cada
+ * dispositivo. Cualquiera con acceso a esa carpeta puede leerla, así que la
+ * opción viene apagada y se explica en Ajustes.
  *
  * Borrar un tablero es un **borrado lógico**: se marca `appProperties.deleted`
  * y se refresca `modifiedTime`, para que el otro dispositivo se entere y borre
@@ -34,6 +40,11 @@ export const ROOT_FOLDER_NAME = 'Moodboard';
 export const SCENES_FOLDER_NAME = 'scenes';
 /** Subcarpeta con los bitmaps de las imágenes. */
 export const BLOBS_FOLDER_NAME = 'blobs';
+/**
+ * Archivo con los ajustes que el usuario pide guardar en su Drive (hoy, sólo
+ * la clave de la API de Claude). Vive en la carpeta raíz de la app.
+ */
+export const SETTINGS_FILE_NAME = 'ajustes.json';
 
 /** MIME de las carpetas de Drive. */
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -70,6 +81,15 @@ export interface TokenSource {
   get(): Promise<string | null>;
   /** Fuerza una renovación tras un 401. Devuelve el token nuevo o `null`. */
   refresh(): Promise<string | null>;
+}
+
+/**
+ * Ajustes que el usuario decide guardar en su propio Drive. Hoy sólo la clave
+ * de la API de Claude, para no tener que volver a crearla en cada dispositivo
+ * ni cuando el navegador borra los datos del sitio.
+ */
+export interface DriveSettings {
+  aiApiKey?: string;
 }
 
 /** Archivo de Drive tal como lo devuelve la API con los campos que pedimos. */
@@ -453,6 +473,56 @@ export class Drive {
       n++;
     }
     return n;
+  }
+
+  // -------------------------------------------------------------------------
+  // ajustes guardados en Drive (la clave API, si el usuario lo pide)
+
+  /** Busca el archivo de ajustes en la carpeta de la app. */
+  private async findSettingsFile(): Promise<DriveFile | null> {
+    const folders = await this.ensureFolders();
+    const q = [`name=${quote(SETTINGS_FILE_NAME)}`, `${quote(folders.root)} in parents`, 'trashed=false'].join(' and ');
+    const data = await this.json<{ files?: DriveFile[] }>(
+      `${API}/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&pageSize=10`
+    );
+    return data.files?.[0] ?? null;
+  }
+
+  /** Lee los ajustes guardados en Drive; `null` si no hay archivo o es ilegible. */
+  async readSettings(): Promise<DriveSettings | null> {
+    const file = await this.findSettingsFile();
+    if (!file) return null;
+    const res = await this.request(`${API}/files/${encodeURIComponent(file.id)}?alt=media`);
+    try {
+      const data = (await res.json()) as DriveSettings;
+      return data && typeof data === 'object' ? data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Escribe (creando o actualizando) los ajustes guardados en Drive. */
+  async writeSettings(data: DriveSettings): Promise<void> {
+    const folders = await this.ensureFolders();
+    const file = await this.findSettingsFile();
+    const metadata: Record<string, unknown> = {
+      name: SETTINGS_FILE_NAME,
+      mimeType: 'application/json',
+      appProperties: { kind: 'settings' }
+    };
+    if (!file) metadata.parents = [folders.root];
+    const { body, type } = multipartBody(metadata, JSON.stringify(data), 'application/json');
+    const url = file
+      ? `${UPLOAD}/files/${encodeURIComponent(file.id)}?uploadType=multipart&fields=id`
+      : `${UPLOAD}/files?uploadType=multipart&fields=id`;
+    await this.request(url, { method: file ? 'PATCH' : 'POST', headers: { 'Content-Type': type }, body });
+  }
+
+  /** Borra el archivo de ajustes de Drive. No falla si no existe. */
+  async deleteSettings(): Promise<void> {
+    const file = await this.findSettingsFile();
+    if (!file) return;
+    await this.request(`${API}/files/${encodeURIComponent(file.id)}`, { method: 'DELETE' });
   }
 
   // -------------------------------------------------------------------------

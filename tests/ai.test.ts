@@ -23,6 +23,8 @@ import {
   AiError,
   MAX_AD_HOC_CATEGORIES,
   MAX_TOKENS_CLASSIFY,
+  classifyMaxTokens,
+  isEmptyAnswer,
   MAX_TOKENS_DESCRIBE,
   MAX_TOKENS_TAG
 } from '../src/ai/claude';
@@ -44,6 +46,15 @@ function okResponse(text: string, usage = { input_tokens: 1000, output_tokens: 2
     ok: true,
     status: 200,
     json: async () => ({ content: [{ type: 'text', text }], usage })
+  };
+}
+
+/** Respuesta sin texto: el modelo se negó (`stop_reason: 'refusal'`). */
+function refusalResponse(stopReason = 'refusal') {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ content: [], stop_reason: stopReason, usage: { input_tokens: 500, output_tokens: 0 } })
   };
 }
 
@@ -304,6 +315,27 @@ describe('usageToUsd y formato', () => {
   });
 });
 
+describe('respuestas sin texto', () => {
+  it('distingue negativa, respuesta cortada y fallo raro', async () => {
+    mockFetch(() => refusalResponse('refusal'));
+    const negativa = await describeBoard({ images: [IMG], notes: [], lang: 'es' }).catch((e: unknown) => e);
+    expect(negativa).toBeInstanceOf(AiError);
+    expect((negativa as AiError).reason).toBe('refusal');
+    expect((negativa as AiError).message).toContain('no quiso responder');
+    expect(isEmptyAnswer(negativa)).toBe(true);
+
+    mockFetch(() => refusalResponse('max_tokens'));
+    const cortada = await describeBoard({ images: [IMG], notes: [], lang: 'es' }).catch((e: unknown) => e);
+    expect((cortada as AiError).reason).toBe('truncated');
+    expect((cortada as AiError).message).toContain('se cortó');
+
+    mockFetch(() => refusalResponse('end_turn'));
+    const raro = await describeBoard({ images: [IMG], notes: [], lang: 'es' }).catch((e: unknown) => e);
+    expect((raro as AiError).reason).toBe('empty');
+    expect(isEmptyAnswer(new AiError('otra cosa', 500))).toBe(false);
+  });
+});
+
 describe('classifyImages', () => {
   const imgs = (n: number, prefix = 'i') =>
     Array.from({ length: n }, (_, k) => ({ id: `${prefix}${k}`, name: `${prefix}${k}.jpg`, jpegBase64: 'AAAA' }));
@@ -317,10 +349,45 @@ describe('classifyImages', () => {
       max_tokens: number;
       messages: { content: { type: string; text?: string }[] }[];
     };
-    expect(body.max_tokens).toBe(MAX_TOKENS_CLASSIFY);
+    // el tope sale del tamaño del lote, no de una constante fija
+    expect(body.max_tokens).toBe(classifyMaxTokens(3));
+    expect(classifyMaxTokens(20)).toBeGreaterThan(MAX_TOKENS_CLASSIFY);
     const last = body.messages[0]!.content.at(-1)!.text!;
     expect(last).toContain('Categorías permitidas: Poses, Texturas, Ropa');
     expect(last).toContain('"Otros"');
+  });
+
+  it('si el modelo se niega parte el lote y sólo la imagen culpable va a Otros', async () => {
+    // la respuesta sin texto con stop_reason «refusal» es lo que devolvió la
+    // API en el tablero de prueba: antes tumbaba la clasificación completa
+    let n = 0;
+    globalThis.fetch = vi.fn(async (_url: unknown, init: unknown) => {
+      n++;
+      const body = JSON.parse(String((init as RequestInit).body)) as {
+        messages: { content: { type: string; text?: string }[] }[];
+      };
+      const ids = body.messages[0]!.content
+        .map((c) => /^id: (\S+)/.exec(c.text ?? '')?.[1])
+        .filter((v): v is string => !!v);
+      // el lote que incluya «i1» se rechaza; los demás responden bien
+      if (ids.includes('i1')) return refusalResponse();
+      return okResponse(JSON.stringify({ assignments: Object.fromEntries(ids.map((id) => [id, 'Poses'])) }));
+    }) as unknown as typeof fetch;
+
+    const { result } = await classifyImages({ images: imgs(4), categories: ['Poses'], lang: 'es' });
+    expect(result.assignments).toEqual({ i0: 'Poses', i1: 'Otros', i2: 'Poses', i3: 'Poses' });
+    expect(result.skipped).toBe(1);
+    expect(result.categories).toEqual(['Poses', 'Otros']);
+    // 1 lote de 4 + 2 mitades + 2 cuartos = las llamadas contadas
+    expect(result.calls).toBe(n);
+    expect(n).toBeGreaterThan(1);
+  });
+
+  it('si el modelo se niega con una sola imagen, esa queda en Otros sin reventar', async () => {
+    mockFetch(() => refusalResponse());
+    const { result } = await classifyImages({ images: imgs(1), categories: ['Poses'], lang: 'es' });
+    expect(result.assignments).toEqual({ i0: 'Otros' });
+    expect(result.skipped).toBe(1);
   });
 
   it('sin categorías la IA las propone en el primer lote y los siguientes las reutilizan', async () => {

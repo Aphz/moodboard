@@ -8,11 +8,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mem = new Map<string, unknown>();
+/** Almacén en memoria compartido con el mock; `failRead` simula una base rota. */
+const store = vi.hoisted(() => ({ mem: new Map<string, unknown>(), failRead: false }));
 vi.mock('../src/core/persistence', () => ({
-  getKV: async (k: string, def: unknown) => (mem.has(k) ? mem.get(k) : def),
-  setKV: async (k: string, v: unknown) => void mem.set(k, v)
+  getKV: async (k: string, def: unknown) => {
+    if (store.failRead) throw new Error('base bloqueada');
+    return store.mem.has(k) ? store.mem.get(k) : def;
+  },
+  setKV: async (k: string, v: unknown) => void store.mem.set(k, v)
 }));
+const mem = store.mem;
 
 const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -24,6 +29,7 @@ async function loadSettings() {
 
 beforeEach(() => {
   mem.clear();
+  store.failRead = false;
   localStorage.clear();
   vi.restoreAllMocks();
 });
@@ -69,6 +75,26 @@ describe('clave API en los ajustes', () => {
     await s.updateAppSettings({ theme: 'light' });
     expect(s.appSettings.aiApiKey).toBe(KEY);
     expect(localStorage.getItem('moodboard.aiApiKey')).toBe(KEY);
+  });
+
+  it('guardar otra preferencia no propaga una clave vacía si hay respaldo', async () => {
+    // simula el caso real: IndexedDB volvió sin ajustes y el respaldo llegó
+    // después de cargar (otra pestaña, o una lectura que falló y se recuperó)
+    const s = await loadSettings();
+    await s.loadAppSettings();
+    expect(s.appSettings.aiApiKey).toBe('');
+    localStorage.setItem('moodboard.aiApiKey', KEY);
+    await s.updateAppSettings({ aiModel: 'claude-sonnet-5' });
+    expect(s.appSettings.aiApiKey).toBe(KEY);
+    expect((mem.get('appSettings') as { aiApiKey: string }).aiApiKey).toBe(KEY);
+  });
+
+  it('si IndexedDB falla al leer, la app arranca igual y respeta el respaldo', async () => {
+    store.failRead = true;
+    localStorage.setItem('moodboard.aiApiKey', KEY);
+    const s = await loadSettings();
+    const loaded = await s.loadAppSettings();
+    expect(loaded.aiApiKey).toBe(KEY);
   });
 
   it('sin localStorage disponible los ajustes siguen funcionando', async () => {

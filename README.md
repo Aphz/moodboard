@@ -123,8 +123,12 @@ en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store
 copia de respaldo en `localStorage` por si Safari vacía la base), nunca se sube a ninguna
 parte y se muestra ofuscada. Sólo se guarda si tiene forma de clave (`sk-ant-…`): un campo
 vacío o una contraseña autocompletada por iOS no la pisan, y para quitarla hay un botón
-explícito. Sin clave, los comandos IA quedan
-desactivados y ni siquiera aparecen en los menús.
+explícito. Si sincronizas con Google Drive puedes activar **«Guardar la clave en mi Google
+Drive»** (apagada por defecto): queda en la carpeta `Moodboard` de tu cuenta, llega sola a
+tus otros dispositivos y sobrevive a que el navegador borre los datos del sitio, a cambio
+de que cualquiera con acceso a esa carpeta pueda leerla. Hay también un botón **Copiar clave** para guardarla en el llavero o en tu gestor
+de contraseñas: así no dependes de este almacén si el navegador borra los datos del sitio.
+Sin clave, los comandos IA quedan desactivados y ni siquiera aparecen en los menús.
 
 - **IA: describir tablero** — manda miniaturas de hasta 20 imágenes y el texto de las notas, y devuelve una descripción en markdown que puedes insertar como nota.
 - **IA: etiquetar imágenes seleccionadas** — devuelve etiquetas por imagen y las agrega a `item.tags` en un solo paso de deshacer.
@@ -137,6 +141,11 @@ de Anthropic se paga **aparte de la suscripción de Claude.ai**: los créditos s
 compran en console.anthropic.com → Plans & Billing. Las llamadas van directo desde
 el navegador a `https://api.anthropic.com/v1/messages` con la cabecera
 `anthropic-dangerous-direct-browser-access`; no hay proxy ni servidor intermedio.
+
+Si el modelo se niega a responder sobre alguna imagen (pasa: son fotos, y el criterio es suyo),
+la clasificación no se cae: el lote se parte en dos y se reintenta hasta aislar la imagen, que
+queda en *Otros* con un aviso de cuántas fueron. El tope de salida se calcula según el tamaño
+del lote, así que la respuesta tampoco se corta.
 
 Buscar duplicados y buscar similares **no** usan IA: son hash perceptual local y funcionan
 sin clave y sin conexión.
