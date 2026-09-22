@@ -275,6 +275,7 @@ export const en: Record<keyof typeof es, string> = {
   ui_org_need_two: 'At least two images are needed to organize',
   ui_org_no_categories: 'Type at least one category or let the AI propose them',
   ui_org_done: '{categories} categories',
+  ui_org_skipped: '{count} images were left in «Other»: the model did not classify them',
   ui_org_air: 'Air between images',
   ui_org_air_dense: 'Dense (tight collage)',
   ui_org_air_balanced: 'Balanced',

@@ -142,6 +142,11 @@ compran en console.anthropic.com → Plans & Billing. Las llamadas van directo d
 el navegador a `https://api.anthropic.com/v1/messages` con la cabecera
 `anthropic-dangerous-direct-browser-access`; no hay proxy ni servidor intermedio.
 
+Si el modelo se niega a responder sobre alguna imagen (pasa: son fotos, y el criterio es suyo),
+la clasificación no se cae: el lote se parte en dos y se reintenta hasta aislar la imagen, que
+queda en *Otros* con un aviso de cuántas fueron. El tope de salida se calcula según el tamaño
+del lote, así que la respuesta tampoco se corta.
+
 Buscar duplicados y buscar similares **no** usan IA: son hash perceptual local y funcionan
 sin clave y sin conexión.
 

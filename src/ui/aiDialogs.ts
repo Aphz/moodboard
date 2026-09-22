@@ -295,13 +295,14 @@ export async function showAiOrganize(app: App, preset?: ImageItem[]): Promise<vo
     return;
   }
 
-  const calls = Math.max(1, Math.ceil(images.length / TAG_BATCH));
   const tt = toast(t('ui_ai_thinking'), { spinner: true });
   try {
     const { result, usage } = await classifyImages({ images, categories, lang: getLanguage() });
     tt.close();
     applyOrganize(app, result.assignments, result.categories, { group: choice.group, titles: choice.titles, air: choice.air });
-    reportUsage(usage, calls, t('ui_org_done', { categories: result.categories.length }));
+    reportUsage(usage, result.calls, t('ui_org_done', { categories: result.categories.length }));
+    // el modelo puede negarse con alguna imagen: se dice, no se disimula
+    if (result.skipped > 0) toast(t('ui_org_skipped', { count: result.skipped }), { ms: 7000 });
   } catch (e) {
     tt.close();
     toast(`${t('ui_ai_error')}: ${e instanceof AiError ? e.message : String(e)}`, { error: true });

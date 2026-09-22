@@ -44,8 +44,20 @@ export const MAX_TOKENS_TAG = 400;
 /** Tope de salida al sugerir agrupaciones (JSON corto). */
 export const MAX_TOKENS_ARRANGE = 600;
 
-/** Tope de salida por lote al clasificar en categorías (JSON corto). */
+/**
+ * Tope de salida por lote al clasificar en categorías.
+ *
+ * La respuesta es `{"categories":[…],"assignments":{"<id>":"<categoría>",…}}`:
+ * cada imagen cuesta unos 25 tokens de JSON, así que un lote de 20 se acercaba
+ * peligrosamente al tope fijo de 500 y la respuesta se cortaba. Ahora el tope
+ * sale del tamaño del lote, con holgura.
+ */
 export const MAX_TOKENS_CLASSIFY = 500;
+
+/** Tope de salida para un lote de `n` imágenes al clasificar. */
+export function classifyMaxTokens(n: number): number {
+  return Math.min(4000, 200 + Math.max(1, n) * 60);
+}
 
 /** Tope de salida al sugerir simbología (mood + una lista corta de signos). */
 export const MAX_TOKENS_ORNAMENTS = 300;
@@ -90,14 +102,25 @@ export const NO_CREDIT =
   'Sin saldo en la API de Anthropic. Es una cuenta aparte de la suscripción de Claude.ai: ' +
   'compra créditos en console.anthropic.com → Plans & Billing (Billing).';
 
+/** Motivo de una respuesta sin texto utilizable. */
+export type AiEmptyReason = 'refusal' | 'truncated' | 'empty';
+
 /** Error de la capa IA; `status` es el código HTTP cuando lo hay. */
 export class AiError extends Error {
   status?: number;
-  constructor(message: string, status?: number) {
+  /** Si la respuesta llegó sin texto, por qué. */
+  reason?: AiEmptyReason;
+  constructor(message: string, status?: number, reason?: AiEmptyReason) {
     super(message);
     this.name = 'AiError';
     this.status = status;
+    this.reason = reason;
   }
+}
+
+/** ¿Es un error de «la respuesta no trajo texto»? */
+export function isEmptyAnswer(e: unknown): boolean {
+  return e instanceof AiError && e.reason !== undefined;
 }
 
 /** ¿Hay clave API guardada en este dispositivo? */
@@ -197,6 +220,7 @@ interface ApiUsage {
 interface ApiResponse {
   content?: ApiTextBlock[];
   usage?: ApiUsage;
+  stop_reason?: string;
 }
 
 /** Construye el AiError adecuado a partir de una respuesta HTTP fallida. */
@@ -292,7 +316,7 @@ async function callClaude(opts: {
     .map((b) => b.text ?? '')
     .join('')
     .trim();
-  if (!text) throw new AiError('respuesta vacía de la API');
+  if (!text) throw emptyAnswerError(data.stop_reason);
 
   const inputTokens = Number(data.usage?.input_tokens) || 0;
   const outputTokens = Number(data.usage?.output_tokens) || 0;
@@ -304,6 +328,27 @@ async function callClaude(opts: {
 
 // ---------------------------------------------------------------------------
 // Utilidades
+
+/**
+ * Error para una respuesta que llegó sin texto.
+ *
+ * Pasa por dos motivos muy distintos y conviene no confundirlos: el modelo se
+ * negó a responder (`refusal`), o la respuesta se cortó por el tope de salida
+ * (`max_tokens`). El resto es un fallo raro de la API.
+ */
+function emptyAnswerError(stopReason?: string): AiError {
+  if (stopReason === 'refusal') {
+    return new AiError(
+      'el modelo no quiso responder sobre estas imágenes; prueba dejando fuera alguna',
+      undefined,
+      'refusal'
+    );
+  }
+  if (stopReason === 'max_tokens') {
+    return new AiError('la respuesta se cortó por el tope de salida', undefined, 'truncated');
+  }
+  return new AiError('respuesta vacía de la API', undefined, 'empty');
+}
 
 /** Nombre del idioma para los prompts. */
 function langName(lang: AiLang): string {
@@ -513,6 +558,10 @@ export interface ClassifyResult {
   categories: string[];
   /** `{ id: categoría }` para cada imagen recibida. */
   assignments: Record<string, string>;
+  /** Imágenes que el modelo no clasificó y quedaron en la categoría de respaldo. */
+  skipped: number;
+  /** Llamadas a la API que costó (los reintentos por lotes partidos suman). */
+  calls: number;
 }
 
 /**
@@ -549,7 +598,16 @@ export async function classifyImages(input: {
     'Cada imagen va a exactamente una categoría. Devuelve sólo JSON con esta forma: ' +
     '{ "categories": ["..."], "assignments": { "<id>": "<categoría>" } }.';
 
-  for (const batch of chunk(input.images, MAX_IMAGES)) {
+  let skipped = 0;
+  let calls = 0;
+
+  /**
+   * Clasifica un lote. Si la respuesta llega sin texto —el modelo se negó, o
+   * se cortó— parte el lote en dos y reintenta: así una sola imagen
+   * problemática no tumba la clasificación de las otras diecinueve. Cuando ya
+   * no se puede partir más, esa imagen va a la categoría de respaldo.
+   */
+  const runBatch = async (batch: typeof input.images): Promise<void> => {
     const content: ContentBlock[] = [];
     for (const img of batch) {
       content.push({ type: 'text', text: `id: ${img.id} — nombre: ${img.name}` });
@@ -573,7 +631,24 @@ export async function classifyImages(input: {
     }
     content.push({ type: 'text', text: `${instruction} Identificadores: ${batch.map((i) => i.id).join(', ')}.` });
 
-    const res = await callClaude({ system, content, maxTokens: MAX_TOKENS_CLASSIFY, json: true });
+    let res: { text: string; usage: AiUsage };
+    try {
+      calls++;
+      res = await callClaude({ system, content, maxTokens: classifyMaxTokens(batch.length), json: true });
+    } catch (e) {
+      if (!isEmptyAnswer(e)) throw e;
+      if (batch.length > 1) {
+        const half = Math.ceil(batch.length / 2);
+        await runBatch(batch.slice(0, half));
+        await runBatch(batch.slice(half));
+        return;
+      }
+      // una sola imagen y el modelo no la clasifica: va al respaldo
+      assignments[batch[0]!.id] = other;
+      usedOther = true;
+      skipped++;
+      return;
+    }
     usage = addUsage(usage, res.usage);
     const parsed = parseJsonLoose(res.text) as { categories?: unknown; assignments?: unknown };
 
@@ -600,9 +675,11 @@ export async function classifyImages(input: {
       }
       assignments[img.id] = cat;
     }
-  }
+  };
 
-  return { result: { categories: usedOther ? [...known, other] : known, assignments }, usage };
+  for (const batch of chunk(input.images, MAX_IMAGES)) await runBatch(batch);
+
+  return { result: { categories: usedOther ? [...known, other] : known, assignments, skipped, calls }, usage };
 }
 
 /** Simbología propuesta para un tablero: el mood en pocas palabras y sus signos. */

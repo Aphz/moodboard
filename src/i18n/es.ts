@@ -273,6 +273,7 @@ export const es = {
   ui_org_need_two: 'Hacen falta al menos dos imágenes para organizar',
   ui_org_no_categories: 'Escribe al menos una categoría o deja que la IA las proponga',
   ui_org_done: '{categories} categorías',
+  ui_org_skipped: '{count} imágenes quedaron en «Otros»: el modelo no las clasificó',
   ui_org_air: 'Aire entre imágenes',
   ui_org_air_dense: 'Denso (collage apretado)',
   ui_org_air_balanced: 'Equilibrado',
