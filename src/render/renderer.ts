@@ -90,6 +90,15 @@ export class Renderer {
   private dotPattern: { key: string; pattern: CanvasPattern | null } | null = null;
   private vignette: { key: string; grad: CanvasGradient } | null = null;
   private noteLayoutCache = new Map<string, { key: string; lines: TextLine[]; height: number }>();
+  /**
+   * Instantánea de la escena mientras se traza con el lápiz.
+   *
+   * Repintar todo el tablero en cada punto del trazo (imágenes, sombras,
+   * trama, viñeta) come el presupuesto del fotograma y la escritura rápida se
+   * siente pegajosa. Con la escena congelada en un canvas aparte, cada punto
+   * cuesta un `drawImage` más el trazo.
+   */
+  private liveSnapshot: { canvas: HTMLCanvasElement; key: string } | null = null;
 
   constructor(public canvas: HTMLCanvasElement, public store: Store) {
     this.ctx = canvas.getContext('2d', { alpha: true })!;
@@ -116,10 +125,42 @@ export class Renderer {
   // ---------------------------------------------------------------------
   // dibujo principal
 
+  /** Firma de lo que hay pintado: tamaño, encuadre y última mutación de la escena. */
+  private snapshotKey(): string {
+    const v = this.store.scene.viewport;
+    return `${this.width}x${this.height}@${this.dpr}|${v.x},${v.y},${v.zoom}|${this.store.scene.updatedAt}|${this.store.selection.size}`;
+  }
+
+  /** Pinta el trazo en curso con la transformación de la escena. */
+  private drawLiveStroke() {
+    const live = this.overlay.liveStroke;
+    if (!live) return;
+    const { ctx } = this;
+    const v = this.store.scene.viewport;
+    ctx.save();
+    ctx.translate(v.x, v.y);
+    ctx.scale(v.zoom, v.zoom);
+    ctx.translate(live.origin.x, live.origin.y);
+    drawStroke(ctx, live.stroke, 1);
+    ctx.restore();
+  }
+
   draw() {
     const { ctx, store } = this;
     const scene = store.scene;
     const v = scene.viewport;
+
+    // trazo en curso sobre una escena que no cambió: basta con volver a poner
+    // la instantánea y pintar encima lo que lleva el lápiz
+    if (this.overlay.liveStroke && this.liveSnapshot?.key === this.snapshotKey()) {
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      ctx.clearRect(0, 0, this.width, this.height);
+      ctx.drawImage(this.liveSnapshot.canvas, 0, 0, this.width, this.height);
+      this.drawLiveStroke();
+      return;
+    }
+    if (!this.overlay.liveStroke) this.liveSnapshot = null;
+
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.width, this.height);
 
@@ -147,13 +188,6 @@ export class Renderer {
     ctx.scale(v.zoom, v.zoom);
     for (const it of visibleItems) {
       this.drawItem(ctx, it, v.zoom);
-    }
-    if (this.overlay.liveStroke) {
-      const { stroke, origin } = this.overlay.liveStroke;
-      ctx.save();
-      ctx.translate(origin.x, origin.y);
-      drawStroke(ctx, stroke, 1);
-      ctx.restore();
     }
     ctx.restore();
 
@@ -186,6 +220,31 @@ export class Renderer {
       ctx.strokeRect(l.x, l.y, l.w, l.h);
     }
     if (this.overlay.cropId) this.drawCropOverlay(scene);
+
+    // con el lápiz apoyado: guardar lo pintado y añadir el trazo encima
+    if (this.overlay.liveStroke) {
+      this.captureSnapshot();
+      this.drawLiveStroke();
+    }
+  }
+
+  /** Copia lo que hay en el lienzo para reutilizarlo mientras dure el trazo. */
+  private captureSnapshot() {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w <= 0 || h <= 0) return;
+    let snap = this.liveSnapshot?.canvas;
+    if (!snap || snap.width !== w || snap.height !== h) {
+      snap = document.createElement('canvas');
+      snap.width = w;
+      snap.height = h;
+    }
+    const sctx = snap.getContext('2d');
+    if (!sctx) return;
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.clearRect(0, 0, w, h);
+    sctx.drawImage(this.canvas, 0, 0);
+    this.liveSnapshot = { canvas: snap, key: this.snapshotKey() };
   }
 
   /** Trama de puntos muy sutil que da sensación de profundidad y de "mesa" infinita. */

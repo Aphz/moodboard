@@ -100,7 +100,7 @@ que PureRef 2.1.
 - **Lienzo infinito** con zoom de 0,02× a 40×, color de fondo configurable (incluido transparente) y cuadrícula opcional con ajuste (`G` / `⇧G`).
 - **Imágenes**: importar desde archivos, portapapeles, URL o arrastrar y soltar; optimización automática al importar (lado máximo y calidad configurables); recorte con gizmo y bloqueo de proporción; reemplazar imagen; voltear, rotar y escalar.
 - **Notas** con markdown ligero (negrita, cursiva, viñetas, enlaces), tamaño, color, fondo, alineación y alto automático.
-- **Dibujo** con lápiz, línea, flecha, rectángulo y elipse; presión de Apple Pencil; opacidad por dibujo.
+- **Dibujo** con lápiz, línea, flecha, rectángulo y elipse; presión de Apple Pencil; opacidad por dibujo. El Pencil dibuja directamente, sin cambiar de herramienta (el dedo sigue seleccionando y moviendo el lienzo), los trazos seguidos y cercanos se acumulan en una sola anotación, y mientras trazas la escena se congela para que el trazo no se atrase.
 - **Jerarquía**: grupos y relación padre/hijo (`⌘G`, `P`), panel de árbol con búsqueda, visibilidad, bloqueo e indicador de recorte.
 - **Organizar**: collage en columnas (las apaisadas a doble ancho, con el aire que elijas), óptimo (empaquetado por estanterías), cuadrícula, fila, columna, aleatorio y por color; normalizar tamaño y área; alinear, distribuir y apilar.
 - **Símbolos, ornamentos y conectores**: signos sueltos acordes al mood del tablero, puestos en los claros sin tapar imágenes, y flechas entre referencias. Funciona sin clave API; con ella, la IA propone el mood y su repertorio.

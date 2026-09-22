@@ -71,6 +71,7 @@ export function showSettingsDialog(app: App) {
     row(t('ui_autosave'), select(String(a.autosaveMs), [['0', '—'], ['2000', '2 s'], ['5000', '5 s'], ['15000', '15 s']], (v) => void updateAppSettings({ autosaveMs: Number(v) }))),
     h('h3', null, 'Apple Pencil'),
     row(t('ui_pencil_pressure'), check(a.pencilPressure, (v) => void updateAppSettings({ pencilPressure: v }))),
+    row(t('ui_pencil_always_draws'), check(a.pencilAlwaysDraws, (v) => void updateAppSettings({ pencilAlwaysDraws: v }))),
     row(t('ui_pencil_only_draw'), check(a.pencilOnlyDraw, (v) => void updateAppSettings({ pencilOnlyDraw: v }))),
     h('h3', null, t('ui_sync_section')),
     h('div', { class: 'row' },

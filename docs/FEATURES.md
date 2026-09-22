@@ -136,6 +136,16 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 | Separación de alineación (padding) configurable | ✅ | `scene.settings.alignPadding`, en Ajustes |
 | Alinear con padding 0 sin dejar huecos (fix 2.1.3) | ✅ | `alignItems()` con `padding` 0 no reordena ni separa |
 
+## Lápiz y escritura a mano
+
+| PureRef | Estado | Detalle |
+|---|---|---|
+| Dibujar sobre el tablero | ➕ | Lápiz, línea, flecha, rectángulo y elipse, con presión del Apple Pencil |
+| El lápiz dibuja sin cambiar de herramienta | ➕ | Con `pencilAlwaysDraws` (activado), el Apple Pencil traza aunque esté la herramienta de selección: el dedo sigue seleccionando y moviendo el lienzo, como en Notas o Freeform. Antes había que entrar en modo dibujo y, si no, trazar sobre una imagen la seleccionaba |
+| Escritura a mano en un solo ítem | ➕ | Los trazos seguidos y cercanos se acumulan en el mismo dibujo (`src/features/ink.ts`: 1,5 s de ventana y un margen relativo al trazo); uno lejano o tardío abre otro. Antes se pegaban al ítem seleccionado, viniera de donde viniera |
+| Trazar sin marcos de por medio | ➕ | Lo dibujado no queda seleccionado: el gizmo aparecía justo donde iba la letra siguiente y el toque terminaba escalando el trazo anterior |
+| Trazo fluido con el tablero lleno | ➕ | Mientras el lápiz está apoyado, la escena se congela en una instantánea y cada punto cuesta un `drawImage` más el trazo (medido con 24 imágenes y 12 notas: 1,04 ms → 0,09 ms por fotograma) |
+
 ## Selección y arrastre entre categorías
 
 | PureRef | Estado | Detalle |
@@ -212,6 +222,7 @@ Cosas que esta app hace y PureRef no:
 
 ## Roadmap sugerido
 
+0. **Diferenciarnos de DarkRef (pendiente destacado).** DarkRef es una app de referencias para iPhone y iPad muy parecida a esta en estética y en funciones básicas; lo que hoy nos distingue es la capa de IA (clasificar, organizar en collage, leer el mood y proponer simbología) y el trabajo con el Apple Pencil. Antes de pensar en distribuirla hay que decidir en qué nos jugamos la diferencia y llevarlo al producto: la organización asistida, los ornamentos y conectores, y lo que salga del análisis. Tarea abierta: comparar función por función y fijar el rumbo.
 1. **Sincronización con iCloud Drive / Archivos.** Guardar y abrir `.moodboard` desde el proveedor de archivos del sistema con `@capacitor/filesystem`, para que el tablero viva fuera del sandbox de la app.
 2. **Recibir imágenes compartidas desde otras apps** ("Compartir → Moodboard"). En la PWA se resuelve declarando `share_target` en el manifiesto **y** atendiendo el POST a `./share` desde el service worker (hoy no está ninguna de las dos partes, por eso se quitó del manifiesto). En la versión nativa, con una share extension de iOS más `@capacitor/share`.
 3. **Colaboración.** Escenas compartidas con CRDT sobre el mismo modelo plano de ítems; hoy el modelo ya es serializable y sin referencias cíclicas, así que el cambio es de transporte, no de datos.

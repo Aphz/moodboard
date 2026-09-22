@@ -224,7 +224,12 @@ export class GestureController {
 
   private onDown = (e: PointerEvent) => {
     if (e.button > 2) return;
-    this.canvas.setPointerCapture(e.pointerId);
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // Safari puede rechazar la captura si el puntero ya se soltó; el gesto
+      // sigue funcionando sin ella
+    }
     const p = this.local(e);
     const info: PointerInfo = { id: e.pointerId, x: p.x, y: p.y, sx: p.x, sy: p.y, type: e.pointerType, t: performance.now() };
     this.pointers.set(e.pointerId, info);
@@ -285,10 +290,18 @@ export class GestureController {
       return;
     }
 
-    // tiradores
+    // tiradores (también con el lápiz: son un blanco explícito y pequeño)
     const h = this.handleAt(p);
     if (h) {
       this.startHandle(h, p);
+      return;
+    }
+
+    // El Apple Pencil dibuja sin pedir permiso, como en Notas o Freeform: sin
+    // esto, trazar sobre una imagen la seleccionaba o la arrastraba.
+    // (con una herramienta elegida a mano —lazo, mano, recorte— manda la herramienta)
+    if (e.pointerType === 'pen' && appSettings.pencilAlwaysDraws && this.tool === 'select') {
+      this.startStroke(e, scene);
       return;
     }
 
