@@ -5,7 +5,7 @@
  * suma al contador local.
  */
 import type { App } from '../app';
-import { createGroupItem, createNoteItem, type ImageItem, type ItemId } from '../core/model';
+import { createGroupItem, createNoteItem, unionRects, type ImageItem, type ItemId } from '../core/model';
 import { clustersFromAssignments, layoutByCategory } from '../features/organize';
 import { getLanguage, t } from '../i18n';
 import { h, miniMarkdown } from './dom';
@@ -362,14 +362,19 @@ function organizeOptionsDialog(count: number): Promise<OrganizeChoice | null> {
     const d = showDialog(
       [
         h('h2', null, t('ui_org_title')),
-        h('p', null, t('ui_org_intro', { count })),
+        h('p', { class: 'lead' }, t('ui_org_intro', { count })),
         h('label', { class: 'row' }, adHoc, h('span', null, t('ui_org_mode_adhoc'))),
         h('label', { class: 'row' }, presetR, h('span', null, t('ui_org_mode_preset'))),
         h('div', { class: 'field' }, cats, h('div', { class: 'hint' }, t('ui_org_categories_hint'))),
         h('label', { class: 'row' }, group, h('span', null, t('ui_org_group'))),
         h('label', { class: 'row' }, titles, h('span', null, t('ui_org_titles'))),
-        h('div', { class: 'field' }, h('label', null, t('ui_org_air')), air, h('div', { class: 'hint' }, t('ui_org_air_hint'))),
-        h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), model),
+        // aire y modelo, uno al lado del otro: son dos ajustes cortos
+        h(
+          'div',
+          { class: 'field-pair' },
+          h('div', { class: 'field' }, h('label', null, t('ui_org_air')), air),
+          h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), model)
+        ),
         h(
           'div',
           { class: 'actions' },
@@ -471,9 +476,11 @@ export function applyOrganize(
         created.push(...members);
       }
     }
-    S.select(created);
+    // Nada queda seleccionado a propósito: si se dejaban seleccionados todos
+    // los grupos, el primer arrastre sobre una imagen movía el tablero entero.
+    S.clearSelection();
   });
-  app.gestures.fitSelection();
+  app.gestures.fitRect(unionRects(layout.clusters.map((c) => c.rect)));
 }
 
 /**
@@ -632,11 +639,17 @@ export function renderAiSettings(register?: (off: () => void) => void): HTMLElem
     'div',
     { class: 'ai-settings' },
     h('h3', null, t('ui_ai_section')),
-    h('p', { class: 'hint' }, t('ui_ai_what_describe')),
-    h('p', { class: 'hint' }, t('ui_ai_what_tag')),
-    h('p', { class: 'hint' }, t('ui_ai_what_organize')),
-    h('p', { class: 'hint' }, t('ui_ai_what_similar')),
     h('p', { class: 'hint' }, t('ui_ai_billing_note')),
+    // el detalle de cada función se lee una vez: aquí va plegado
+    h(
+      'details',
+      { class: 'routes-details' },
+      h('summary', null, t('ui_ai_what_details')),
+      h('p', { class: 'hint' }, t('ui_ai_what_describe')),
+      h('p', { class: 'hint' }, t('ui_ai_what_tag')),
+      h('p', { class: 'hint' }, t('ui_ai_what_organize')),
+      h('p', { class: 'hint' }, t('ui_ai_what_similar'))
+    ),
     h(
       'div',
       { class: 'field' },

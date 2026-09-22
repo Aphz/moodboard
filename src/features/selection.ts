@@ -13,23 +13,30 @@
 import { itemBounds, unionRects, type Item, type ItemId, type Rect } from '../core/model';
 
 /**
- * Qué ítem debe quedar seleccionado al tocar.
+ * Qué ítem debe quedar seleccionado al tocar, según lo que eligió el toque
+ * anterior **en el mismo sitio**.
  *
- * @param chain    cadena de ancestros: `chain[0]` es el ítem tocado y el
- *                 último es la raíz. La devuelve `ancestorChain`.
- * @param selected ids seleccionados ahora mismo.
+ * El ciclo es hoja → grupo que la contiene → grupo de más afuera → … → hoja.
+ * Se guía por `last` y no por lo que esté seleccionado, porque el toque
+ * reemplaza la selección: mirando la selección, el tercer toque volvía a la
+ * hoja y los grupos anidados quedaban inalcanzables.
+ *
+ * @param chain cadena de ancestros: `chain[0]` es el ítem tocado y el último
+ *              es la raíz. La devuelve `ancestorChain`.
+ * @param last  qué seleccionó el toque anterior sobre esta misma hoja, o
+ *              `null` si es el primer toque (o fue en otro sitio).
  */
-export function selectionTarget(chain: Item[], selected: ReadonlySet<ItemId>): Item | null {
+export function selectionCycle(chain: Item[], last: ItemId | null): Item | null {
   const leaf = chain[0];
   if (!leaf) return null;
-  // la hoja manda: si todavía no está seleccionada, se selecciona ella
-  if (!selected.has(leaf.id)) return leaf;
-  // ya estaba: subir al grupo más cercano que no esté seleccionado
-  for (let i = 1; i < chain.length; i++) {
+  const from = last ? chain.findIndex((c) => c.id === last) : -1;
+  // primer toque, o el anterior fue en otra rama: la hoja
+  if (from < 0) return leaf;
+  for (let i = from + 1; i < chain.length; i++) {
     const up = chain[i]!;
-    if (up.kind === 'group' && !selected.has(up.id)) return up;
+    if (up.kind === 'group') return up;
   }
-  // todo el camino está seleccionado: se queda la hoja
+  // no queda grupo por encima: vuelve a empezar
   return leaf;
 }
 
@@ -80,11 +87,30 @@ export function dropTarget(chain: Item[], moved: ReadonlySet<ItemId>): Item | nu
 }
 
 /**
+ * ¿Puede `target` recibir a `root` al soltarlo?
+ *
+ * Es la MISMA regla que aplica el soltar, y por eso vive aquí: cuando el aviso
+ * del arrastre y el soltar usaban criterios distintos, la caja amarilla decía
+ * «Soltar en X» en casos donde soltar no hacía nada (mover una imagen dentro
+ * de su propia categoría, o dejar una imagen encima de otra).
+ */
+export function acceptsDrop(target: Item, root: Item): boolean {
+  if (target.id === root.id) return false;
+  // a un grupo entra cualquier cosa que no esté ya dentro de él
+  if (target.kind === 'group') return root.parentId !== target.id;
+  // de una imagen sólo cuelgan notas y dibujos
+  return target.kind === 'image' && root.kind !== 'image' && root.kind !== 'group';
+}
+
+/**
  * Caja de lo que le queda a un grupo sin contar lo que se está moviendo.
  *
  * Es la clave para poder sacar algo de su categoría: si se mide el grupo
  * entero, su caja sigue al ítem arrastrado y el grupo «se lo queda» siempre.
- * `null` si al grupo no le quedaría contenido visible.
+ *
+ * Los grupos y lo oculto no cuentan: un grupo cuyo resto está escondido mide
+ * `null`, y entonces el ítem no se saca (igual que cuando el grupo quedaría
+ * vacío), porque no hay caja visible contra la que decidir.
  */
 export function remainingBounds(descendants: Item[], moved: ReadonlySet<ItemId>): Rect | null {
   const rest = descendants.filter((d) => d.kind !== 'group' && d.visible && !moved.has(d.id));

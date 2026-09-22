@@ -76,6 +76,12 @@ export class Renderer {
     hideGizmo: false,
     interacting: false
   };
+  /**
+   * Franjas que tapan las barras flotantes, en píxeles CSS. Las actualiza la
+   * app al medirlas; sirven para no dibujar rótulos debajo de ellas ni bajo el
+   * área segura de iOS.
+   */
+  insets = { top: 8, right: 8, bottom: 8, left: 8 };
   private raf = 0;
   /** sombras suaves bajo los ítems (se apagan durante pan/zoom y en escenas muy grandes) */
   private shadows = true;
@@ -169,7 +175,7 @@ export class Renderer {
       }
     } else if (this.overlay.hoverLabel) {
       // sin destino: el aviso va arriba al centro (por ejemplo «sacar del grupo»)
-      this.drawDropLabel(this.overlay.hoverLabel, { x: 0, y: 8, w: this.width, h: 0 });
+      this.drawDropLabel(this.overlay.hoverLabel, { x: 0, y: Math.max(8, this.insets.top), w: this.width, h: 0 });
     }
     if (this.overlay.lasso) {
       const l = this.overlay.lasso;
@@ -481,8 +487,7 @@ export class Renderer {
     // centrado sobre el grupo, dentro del lienzo, y por debajo si no cabe arriba
     const cx = Math.min(Math.max(s.x + s.w / 2, w / 2 + 8), Math.max(w / 2 + 8, this.width - w / 2 - 8));
     // por encima del tirador de rotación, que vive sobre el borde superior
-    const above = s.y - h - ROTATE_HANDLE_OFFSET - 10;
-    const y = above >= 8 ? above : Math.min(s.y + 8, this.height - h - 8);
+    const y = this.labelY(s, h, ROTATE_HANDLE_OFFSET + 10);
     ctx.beginPath();
     roundRect(ctx, cx - w / 2, y, w, h, 12);
     ctx.fillStyle = 'rgba(10,132,255,0.92)';
@@ -495,6 +500,19 @@ export class Renderer {
     ctx.fillText(text, cx, y + h / 2);
     ctx.restore();
     ctx.restore();
+  }
+
+  /**
+   * Dónde cabe un rótulo de alto `h` respecto de la caja `s`: encima si hay
+   * sitio, y si no justo dentro, pero siempre dentro de la pantalla y fuera de
+   * las barras. Sin este recorte, arrastrar dentro de una categoría más alta
+   * que la vista dibujaba el rótulo fuera del lienzo (invisible).
+   */
+  private labelY(s: Rect, h: number, gap = 8): number {
+    const min = Math.max(8, this.insets.top);
+    const max = Math.max(min, this.height - h - Math.max(8, this.insets.bottom));
+    const above = s.y - h - gap;
+    return Math.min(Math.max(above >= min ? above : s.y + gap, min), max);
   }
 
   /**
@@ -513,8 +531,7 @@ export class Renderer {
     const h = 24;
     const w = Math.min(ctx.measureText(label).width + padX * 2, Math.max(60, this.width - 16));
     const cx = Math.min(Math.max(s.x + s.w / 2, w / 2 + 8), Math.max(w / 2 + 8, this.width - w / 2 - 8));
-    const above = s.y - h - 8;
-    const y = above >= 8 ? above : Math.min(s.y + 8, this.height - h - 8);
+    const y = this.labelY(s, h);
     ctx.beginPath();
     roundRect(ctx, cx - w / 2, y, w, h, 12);
     ctx.fillStyle = 'rgba(255,204,0,0.95)';

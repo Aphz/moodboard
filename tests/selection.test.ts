@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createGroupItem, createImageItem, createNoteItem, type Item, type ItemId } from '../src/core/model';
-import { ancestorChain, dropTarget, remainingBounds, selectionTarget } from '../src/features/selection';
+import { acceptsDrop, ancestorChain, dropTarget, remainingBounds, selectionCycle } from '../src/features/selection';
 
 /** Escena de prueba: un grupo «Poses» dentro de un grupo «Tablero». */
 const tablero = createGroupItem({ id: 'g_tablero', name: 'Tablero' });
@@ -43,40 +43,57 @@ describe('ancestorChain', () => {
   });
 });
 
-describe('selectionTarget', () => {
+describe('selectionCycle', () => {
+  /** Simula toques repetidos en el mismo sitio sobre la misma hoja. */
+  function toques(it: Item, n: number): (string | undefined)[] {
+    const chain = chainOf(it);
+    const out: (string | undefined)[] = [];
+    let last: ItemId | null = null;
+    for (let i = 0; i < n; i++) {
+      const picked = selectionCycle(chain, last);
+      out.push(picked?.id);
+      last = picked?.id ?? null;
+    }
+    return out;
+  }
+
   it('el primer toque selecciona la imagen, no el grupo', () => {
-    expect(selectionTarget(chainOf(foto), new Set())?.id).toBe('im_foto');
+    expect(selectionCycle(chainOf(foto), null)?.id).toBe('im_foto');
   });
 
-  it('volver a tocarla sube al grupo que la contiene', () => {
-    expect(selectionTarget(chainOf(foto), new Set(['im_foto']))?.id).toBe('g_poses');
-  });
-
-  it('y el toque siguiente sube al grupo de más afuera', () => {
-    expect(selectionTarget(chainOf(foto), new Set(['im_foto', 'g_poses']))?.id).toBe('g_tablero');
-  });
-
-  it('con el grupo seleccionado, tocar dentro vuelve a la imagen', () => {
-    expect(selectionTarget(chainOf(foto), new Set(['g_poses']))?.id).toBe('im_foto');
-  });
-
-  it('si ya está todo seleccionado se queda la hoja', () => {
-    const todo = new Set(['im_foto', 'g_poses', 'g_tablero']);
-    expect(selectionTarget(chainOf(foto), todo)?.id).toBe('im_foto');
+  it('repetir el toque sube por la rama y vuelve a la hoja', () => {
+    // imagen → su categoría → el grupo de más afuera → imagen otra vez
+    expect(toques(foto, 4)).toEqual(['im_foto', 'g_poses', 'g_tablero', 'im_foto']);
   });
 
   it('una imagen sin grupo se selecciona ella misma siempre', () => {
-    expect(selectionTarget(chainOf(suelta), new Set())?.id).toBe('im_suelta');
-    expect(selectionTarget(chainOf(suelta), new Set(['im_suelta']))?.id).toBe('im_suelta');
+    expect(toques(suelta, 3)).toEqual(['im_suelta', 'im_suelta', 'im_suelta']);
+  });
+
+  it('un toque en otra rama empieza de nuevo por la hoja', () => {
+    expect(selectionCycle(chainOf(foto), 'im_suelta')?.id).toBe('im_foto');
   });
 
   it('una nota colgada de una imagen sube al grupo, no a la imagen', () => {
-    // la imagen no es grupo: tocar dos veces la nota no selecciona la imagen
-    expect(selectionTarget(chainOf(nota), new Set(['n_1']))?.id).toBe('g_poses');
+    expect(toques(nota, 3)).toEqual(['n_1', 'g_poses', 'g_tablero']);
   });
 
   it('sin cadena no hay nada que seleccionar', () => {
-    expect(selectionTarget([], new Set())).toBeNull();
+    expect(selectionCycle([], null)).toBeNull();
+  });
+});
+
+describe('acceptsDrop', () => {
+  it('a un grupo entra lo que no esté ya dentro', () => {
+    expect(acceptsDrop(poses, suelta)).toBe(true);
+    expect(acceptsDrop(poses, foto)).toBe(false); // ya es hija de «Poses»
+    expect(acceptsDrop(poses, poses)).toBe(false);
+  });
+
+  it('sobre una imagen sólo se cuelgan notas y dibujos', () => {
+    expect(acceptsDrop(suelta, nota)).toBe(true);
+    expect(acceptsDrop(suelta, foto)).toBe(false); // imagen sobre imagen, no
+    expect(acceptsDrop(suelta, poses)).toBe(false);
   });
 });
 
