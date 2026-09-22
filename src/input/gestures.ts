@@ -297,8 +297,8 @@ export class GestureController {
       return;
     }
 
-    // El Apple Pencil dibuja sin pedir permiso, como en Notas o Freeform: sin
-    // esto, trazar sobre una imagen la seleccionaba o la arrastraba.
+    // El Apple Pencil dibuja sin pedir permiso: sin esto, trazar sobre una
+    // imagen la seleccionaba o la arrastraba.
     // (con una herramienta elegida a mano —lazo, mano, recorte— manda la herramienta)
     if (e.pointerType === 'pen' && appSettings.pencilAlwaysDraws && this.tool === 'select') {
       this.startStroke(e, scene);

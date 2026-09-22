@@ -22,8 +22,8 @@ export interface AppSettings {
   pencilOnlyDraw: boolean;
   /**
    * El Apple Pencil dibuja siempre, sin entrar antes en modo dibujo (el dedo
-   * sigue seleccionando y moviendo el lienzo). Es lo que hacen Notas o
-   * Freeform, y sin esto trazar sobre una imagen la seleccionaba.
+   * sigue seleccionando y moviendo el lienzo). Sin esto, trazar sobre una
+   * imagen la seleccionaba.
    */
   pencilAlwaysDraws: boolean;
   /** Clave API opcional para funciones IA (se guarda sólo en este dispositivo) */

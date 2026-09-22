@@ -1,5 +1,5 @@
 /**
- * Algoritmos de ordenación automática de ítems (tipo PureRef).
+ * Algoritmos de ordenación automática de ítems.
  *
  * Todas las funciones de este módulo son PURAS: reciben los ítems
  * seleccionados (los "roots" de la selección) y devuelven una lista de

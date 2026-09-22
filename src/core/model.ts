@@ -2,9 +2,9 @@
  * Modelo de datos del moodboard.
  *
  * Un `Scene` es un lienzo infinito con una lista plana de `Item`s.
- * La jerarquía (padre/hijo, grupos) se expresa con `parentId`, igual que
- * PureRef: las notas y dibujos pueden ser hijos de una imagen y se mueven
- * con ella; un `group` es un ítem contenedor sin contenido visual propio.
+ * La jerarquía (padre/hijo, grupos) se expresa con `parentId`: las notas y
+ * los dibujos pueden ser hijos de una imagen y se mueven con ella; un `group`
+ * es un ítem contenedor sin contenido visual propio.
  *
  * Todas las coordenadas de ítems están en espacio de escena (unidades de
  * lienzo, no píxeles de pantalla). `x,y` es el centro del ítem; `w,h` su
@@ -389,7 +389,7 @@ export function paintOrder(scene: Scene): Item[] {
 /**
  * Orden de renderizado: primero imágenes (y grupos), después notas y dibujos,
  * cada bloque en orden de pintado. Así las anotaciones nunca quedan tapadas
- * por una imagen hermana, igual que en PureRef.
+ * por una imagen hermana.
  */
 export function renderOrder(scene: Scene): Item[] {
   const order = paintOrder(scene);
