@@ -22,6 +22,16 @@ import { sceneDigest } from '../src/sync/merge';
 // ---------------------------------------------------------------------------
 // dobles de `src/core/persistence` y `src/core/settings`
 
+/** Ajustes de la app, mutables: algunas pruebas los cambian y los revisan. */
+const settingsMem = vi.hoisted(() => ({
+  appSettings: {
+    googleClientId: 'moodboard-test.apps.googleusercontent.com',
+    aiApiKey: '',
+    aiKeyInDrive: false
+  } as Record<string, unknown>,
+  updates: [] as Record<string, unknown>[]
+}));
+
 const mem = vi.hoisted(() => ({
   kv: new Map<string, unknown>(),
   scenes: new Map<string, unknown>(),
@@ -53,8 +63,11 @@ vi.mock('../src/core/persistence', () => ({
 }));
 
 vi.mock('../src/core/settings', () => ({
-  appSettings: { googleClientId: 'moodboard-test.apps.googleusercontent.com' },
-  updateAppSettings: async () => undefined
+  appSettings: settingsMem.appSettings,
+  updateAppSettings: async (patch: Record<string, unknown>) => {
+    Object.assign(settingsMem.appSettings, patch);
+    settingsMem.updates.push(patch);
+  }
 }));
 
 // ---------------------------------------------------------------------------
@@ -336,6 +349,9 @@ beforeEach(() => {
   mem.scenes.clear();
   mem.blobs.clear();
   mem.provider = null;
+  settingsMem.appSettings.aiApiKey = '';
+  settingsMem.appSettings.aiKeyInDrive = false;
+  settingsMem.updates.length = 0;
   server = new FakeDrive();
   vi.stubGlobal('fetch', vi.fn(server.fetch));
   vi.stubGlobal('google', {
@@ -418,6 +434,32 @@ describe('Drive', () => {
     const folders = await new Drive(fakeTokens()).ensureFolders();
     expect(folders).toEqual({ root, scenes, blobs });
     expect(server.calls.every((c) => c.method === 'GET')).toBe(true);
+  });
+
+  it('guarda, lee y borra la clave API en el archivo de ajustes de la carpeta', async () => {
+    const root = server.folder('Moodboard');
+    server.folder('scenes', root);
+    server.folder('blobs', root);
+    const drive = new Drive(fakeTokens());
+
+    // sin archivo todavía
+    expect(await drive.readSettings()).toBeNull();
+
+    await drive.writeSettings({ aiApiKey: 'sk-ant-api03-abc' });
+    const file = [...server.files.values()].find((f) => f.name === 'ajustes.json');
+    expect(file?.parents).toEqual([root]);
+    expect(file?.appProperties.kind).toBe('settings');
+    expect(await drive.readSettings()).toEqual({ aiApiKey: 'sk-ant-api03-abc' });
+
+    // al reescribir no se duplica el archivo
+    await drive.writeSettings({ aiApiKey: 'sk-ant-api03-xyz' });
+    expect([...server.files.values()].filter((f) => f.name === 'ajustes.json')).toHaveLength(1);
+    expect(await drive.readSettings()).toEqual({ aiApiKey: 'sk-ant-api03-xyz' });
+
+    await drive.deleteSettings();
+    expect(await drive.readSettings()).toBeNull();
+    // borrar de nuevo no falla
+    await expect(drive.deleteSettings()).resolves.toBeUndefined();
   });
 
   it('sube una escena nueva como multipart con sus appProperties', async () => {
@@ -677,6 +719,73 @@ describe('motor de sincronización', () => {
     await sync.markSceneDeleted('s_otro');
 
     expect(server.files.get(fileId)!.appProperties.deleted).toBe('1');
+    await sync.disconnectGoogle();
+  });
+
+  it('adopta la clave API guardada en Drive cuando este dispositivo no tiene', async () => {
+    const { root } = connectedState();
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345';
+    server.files.set('ajustes', {
+      id: 'ajustes',
+      name: 'ajustes.json',
+      mimeType: 'application/json',
+      parents: [root],
+      modifiedTime: '2025-01-01T00:00:00.000Z',
+      appProperties: { kind: 'settings' },
+      content: JSON.stringify({ aiApiKey: KEY })
+    });
+
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+
+    expect(settingsMem.appSettings.aiApiKey).toBe(KEY);
+    // adoptarla implica dejar activada la opción: la clave ya vive en Drive
+    expect(settingsMem.appSettings.aiKeyInDrive).toBe(true);
+    await sync.disconnectGoogle();
+  });
+
+  it('sube la clave a Drive sólo si el usuario activó la opción', async () => {
+    connectedState();
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    const KEY = 'sk-ant-api03-zyxwvutsrqponmlkjihgfedcba987654';
+    settingsMem.appSettings.aiApiKey = KEY;
+
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+    // con la opción apagada no se escribe nada
+    expect([...server.files.values()].some((f) => f.name === 'ajustes.json')).toBe(false);
+
+    settingsMem.appSettings.aiKeyInDrive = true;
+    expect(await sync.pushApiKeyToDrive()).toBe(true);
+    const file = [...server.files.values()].find((f) => f.name === 'ajustes.json');
+    expect(JSON.parse(file!.content)).toEqual({ aiApiKey: KEY });
+
+    // y quitarla borra el archivo, porque no guarda nada más
+    await sync.removeApiKeyFromDrive();
+    expect([...server.files.values()].some((f) => f.name === 'ajustes.json')).toBe(false);
+    await sync.disconnectGoogle();
+  });
+
+  it('no adopta de Drive algo que no tenga forma de clave', async () => {
+    const { root } = connectedState();
+    const abierto = scene('s_abierto', 10);
+    mem.scenes.set(abierto.id, abierto);
+    server.files.set('ajustes', {
+      id: 'ajustes',
+      name: 'ajustes.json',
+      mimeType: 'application/json',
+      parents: [root],
+      modifiedTime: '2025-01-01T00:00:00.000Z',
+      appProperties: { kind: 'settings' },
+      content: JSON.stringify({ aiApiKey: 'no-es-una-clave' })
+    });
+
+    const sync = await loadSync();
+    await sync.initSync(fakeApp(abierto) as never);
+    expect(settingsMem.appSettings.aiApiKey).toBe('');
     await sync.disconnectGoogle();
   });
 

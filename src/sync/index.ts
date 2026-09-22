@@ -36,6 +36,7 @@ import {
   type SceneMeta
 } from '../core/persistence';
 import { appSettings, updateAppSettings } from '../core/settings';
+import { isApiKeyLike } from '../ai/claude';
 import { t } from '../i18n';
 import { Drive, DriveError, SCOPES, fetchEmail, type RemoteSceneMeta, type TokenSource } from './gdrive';
 import { mergeScenes, sceneDigest } from './merge';
@@ -670,6 +671,60 @@ export async function syncNow(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// clave API guardada en el Drive del usuario (opcional)
+
+/**
+ * Pone al día la clave API entre el dispositivo y el Drive del usuario.
+ *
+ * - Si este dispositivo no tiene clave y en Drive hay una, la adopta: es lo que
+ *   hace que al entrar en el otro equipo (o después de que Safari borre los
+ *   datos del sitio) la clave aparezca sola.
+ * - Si este dispositivo tiene clave y la opción está activada, la sube.
+ *
+ * Nunca falla hacia fuera: si Drive no responde, la app sigue igual.
+ */
+export async function syncApiKey(): Promise<void> {
+  if (!drive || !token) return;
+  try {
+    const local = (appSettings.aiApiKey ?? '').trim();
+    if (!local) {
+      const remote = await drive.readSettings();
+      const key = (remote?.aiApiKey ?? '').trim();
+      if (isApiKeyLike(key)) await updateAppSettings({ aiApiKey: key, aiKeyInDrive: true });
+      return;
+    }
+    if (!appSettings.aiKeyInDrive) return;
+    const remote = await drive.readSettings();
+    if ((remote?.aiApiKey ?? '').trim() === local) return;
+    await drive.writeSettings({ ...remote, aiApiKey: local });
+  } catch {
+    /* la clave en Drive es una comodidad: si falla, no se toca nada */
+  }
+}
+
+/** Sube la clave a Drive ahora mismo (al activar la opción en Ajustes). */
+export async function pushApiKeyToDrive(): Promise<boolean> {
+  if (!drive || !token) return false;
+  const local = (appSettings.aiApiKey ?? '').trim();
+  if (!local) return false;
+  const remote = await drive.readSettings();
+  await drive.writeSettings({ ...remote, aiApiKey: local });
+  return true;
+}
+
+/** Borra la clave guardada en Drive (al desactivar la opción o quitar la clave). */
+export async function removeApiKeyFromDrive(): Promise<void> {
+  if (!drive || !token) return;
+  const remote = await drive.readSettings();
+  if (!remote) return;
+  const rest = { ...remote };
+  delete rest.aiApiKey;
+  // si no queda nada más en el archivo, se borra entero
+  if (Object.keys(rest).length === 0) await drive.deleteSettings();
+  else await drive.writeSettings(rest);
+}
+
+// ---------------------------------------------------------------------------
 // sincronización
 
 async function fullSync(): Promise<void> {
@@ -706,6 +761,7 @@ async function fullSync(): Promise<void> {
     lastSyncAt = Date.now();
     lastPollAt = lastSyncAt;
     await setKV(KV_LAST_SYNC, lastSyncAt);
+    await syncApiKey();
     setState('synced');
   } catch (e) {
     fail(e);

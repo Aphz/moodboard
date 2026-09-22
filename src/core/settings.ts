@@ -40,6 +40,14 @@ export interface AppSettings {
    * cambian según el uso, así que se guarda como preferencia.
    */
   collageAir: number;
+  /**
+   * Guardar la clave API en la carpeta que la app tiene en el Drive del
+   * usuario (`Moodboard/ajustes.json`). Apagado por defecto: la clave deja de
+   * vivir sólo en el dispositivo, y quien tenga acceso a esa carpeta puede
+   * leerla. A cambio sobrevive a que el navegador borre los datos del sitio y
+   * llega sola al otro dispositivo.
+   */
+  aiKeyInDrive: boolean;
 }
 
 /** Opciones de aire del collage (fracción del ancho de columna). */
@@ -62,7 +70,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   googleClientId: '',
   aiCategories: 'Poses, Texturas, Ropa',
   aiCategoriesAdHoc: false,
-  collageAir: COLLAGE_AIR.balanced
+  collageAir: COLLAGE_AIR.balanced,
+  aiKeyInDrive: false
 };
 
 export let appSettings: AppSettings = { ...DEFAULT_SETTINGS };

@@ -34,6 +34,7 @@ import {
 } from '../ai/pricing';
 import { COLLAGE_AIR, appSettings, updateAppSettings } from '../core/settings';
 import { ensureBitmaps, getBitmap } from '../render/imageCache';
+import { isConnected, onSyncState, pushApiKeyToDrive, removeApiKeyFromDrive } from '../sync';
 
 /** Calidad JPEG de las miniaturas que se envían (baja a propósito: menos tokens). */
 const THUMB_QUALITY = 0.7;
@@ -481,7 +482,13 @@ export function applyOrganize(
  *
  * Lo monta `settingsDialog.ts`.
  */
-export function renderAiSettings(): HTMLElement {
+/**
+ * Bloque de ajustes de IA.
+ *
+ * @param register recibe las bajas de los oyentes (estado de sincronización)
+ *                 para que el diálogo las suelte al cerrarse.
+ */
+export function renderAiSettings(register?: (off: () => void) => void): HTMLElement {
   const keyInput = h('input', {
     type: 'password',
     placeholder: 'sk-ant-…',
@@ -521,9 +528,15 @@ export function renderAiSettings(): HTMLElement {
       return;
     }
     keyInput.value = '';
-    void updateAppSettings({ aiApiKey: value }).then(() => {
+    void updateAppSettings({ aiApiKey: value }).then(async () => {
       syncKeyState();
       toast(t('ui_ai_key_saved_ok'));
+      if (!appSettings.aiKeyInDrive) return;
+      try {
+        await pushApiKeyToDrive();
+      } catch {
+        toast(t('ui_ai_key_drive_failed'), { error: true });
+      }
     });
   };
   keyInput.addEventListener('change', saveKey);
@@ -548,7 +561,49 @@ export function renderAiSettings(): HTMLElement {
   removeBtn.addEventListener('click', async () => {
     if (!(await confirmDialog(t('ui_ai_key_remove_confirm'), { danger: true }))) return;
     await updateAppSettings({ aiApiKey: '' });
+    // si estaba en Drive, quitarla de ahí también: «quitar» es quitar
+    try {
+      await removeApiKeyFromDrive();
+    } catch {
+      /* si Drive no responde, la clave local ya está fuera */
+    }
     syncKeyState();
+  });
+
+  // Guardar la clave en el Drive del usuario: opcional y apagado por defecto.
+  // Resuelve el caso real de este proyecto (la clave se pierde al limpiar los
+  // datos del sitio y hay que crear otra), a cambio de que salga del equipo.
+  const driveChk = h('input', { type: 'checkbox', checked: appSettings.aiKeyInDrive || undefined });
+  const driveNote = h('div', { class: 'hint' });
+  const syncDriveRow = () => {
+    const connected = isConnected();
+    driveChk.disabled = !connected;
+    driveNote.textContent = connected ? '' : t('ui_ai_key_drive_need_google');
+  };
+  syncDriveRow();
+  register?.(onSyncState(syncDriveRow));
+  driveChk.addEventListener('change', () => {
+    void (async () => {
+      const on = driveChk.checked;
+      driveChk.disabled = true;
+      try {
+        await updateAppSettings({ aiKeyInDrive: on });
+        if (on) {
+          const done = await pushApiKeyToDrive();
+          if (done) toast(t('ui_ai_key_drive_saved'));
+        } else {
+          await removeApiKeyFromDrive();
+          toast(t('ui_ai_key_drive_removed'));
+        }
+      } catch {
+        toast(t('ui_ai_key_drive_failed'), { error: true });
+        driveChk.checked = !on;
+        await updateAppSettings({ aiKeyInDrive: !on });
+      } finally {
+        driveChk.disabled = false;
+        syncDriveRow();
+      }
+    })();
   });
 
   const price = h('div', { class: 'hint' }, modelPriceLabel(resolveModel()));
@@ -581,7 +636,18 @@ export function renderAiSettings(): HTMLElement {
     h('p', { class: 'hint' }, t('ui_ai_what_organize')),
     h('p', { class: 'hint' }, t('ui_ai_what_similar')),
     h('p', { class: 'hint' }, t('ui_ai_billing_note')),
-    h('div', { class: 'field' }, h('label', null, t('ui_ai_key')), keyInput, keyState, h('div', { class: 'hint' }, t('ui_ai_key_hint')), h('div', { class: 'row' }, copyBtn, removeBtn)),
+    h(
+      'div',
+      { class: 'field' },
+      h('label', null, t('ui_ai_key')),
+      keyInput,
+      keyState,
+      h('div', { class: 'hint' }, t('ui_ai_key_hint')),
+      h('div', { class: 'row' }, copyBtn, removeBtn),
+      h('label', { class: 'row' }, driveChk, h('span', null, t('ui_ai_key_drive'))),
+      h('div', { class: 'hint' }, t('ui_ai_key_drive_hint')),
+      driveNote
+    ),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_model')), sel, price),
     h('div', { class: 'field' }, h('label', null, t('ui_ai_usage')), usage, h('div', { class: 'row' }, resetBtn)),
     h('p', { class: 'hint' }, t('ui_ai_local_key'))

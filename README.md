@@ -123,7 +123,10 @@ en Ajustes. La clave se guarda únicamente en este dispositivo (IndexedDB, store
 copia de respaldo en `localStorage` por si Safari vacía la base), nunca se sube a ninguna
 parte y se muestra ofuscada. Sólo se guarda si tiene forma de clave (`sk-ant-…`): un campo
 vacío o una contraseña autocompletada por iOS no la pisan, y para quitarla hay un botón
-explícito. Hay también un botón **Copiar clave** para guardarla en el llavero o en tu gestor
+explícito. Si sincronizas con Google Drive puedes activar **«Guardar la clave en mi Google
+Drive»** (apagada por defecto): queda en la carpeta `Moodboard` de tu cuenta, llega sola a
+tus otros dispositivos y sobrevive a que el navegador borre los datos del sitio, a cambio
+de que cualquiera con acceso a esa carpeta pueda leerla. Hay también un botón **Copiar clave** para guardarla en el llavero o en tu gestor
 de contraseñas: así no dependes de este almacén si el navegador borra los datos del sitio.
 Sin clave, los comandos IA quedan desactivados y ni siquiera aparecen en los menús.
 
