@@ -130,7 +130,8 @@ none → pending → { pan | lasso | move | handle | pinch | pinchItems | draw |
 ```
 
 - **`pending`**: al tocar no se sabe todavía si es toque, arrastre o pulsación larga. Se arma un temporizador de 480 ms para el menú contextual y se decide al primer movimiento que supere el umbral (10 px con dedo, 4 px con mouse).
-- **Ruteo por tipo de puntero**: en modo dibujo, con *pencilOnlyDraw* activo, el dedo entra en `pan` y solo el lápiz entra en `draw`. La presión (`e.pressure`) modula el grosor del trazo si *pencilPressure* está activo.
+- **Ruteo por tipo de puntero**: con *pencilAlwaysDraws* (por defecto), el lápiz entra en `draw` aunque la herramienta sea la de selección —el dedo sigue seleccionando y paneando—; los tiradores del gizmo y las herramientas elegidas a mano (lazo, mano, recorte) mandan sobre esa regla. En modo dibujo, con *pencilOnlyDraw* activo, el dedo entra en `pan` y solo el lápiz entra en `draw`. La presión (`e.pressure`) modula el grosor del trazo si *pencilPressure* está activo.
+- **Trazos y escritura a mano**: al soltar, `commitStroke` decide con `features/ink.ts` (puro) si el trazo continúa el dibujo anterior —seguido en el tiempo y cerca en el espacio— o abre uno nuevo; lo dibujado no se selecciona, para que el gizmo no se interponga en la letra siguiente. Mientras el lápiz está apoyado, el renderizador congela la escena en una instantánea (`liveSnapshot`) y cada punto sólo cuesta un `drawImage` más el trazo.
 - **Dos dedos**: `pinch` mueve y hace zoom del lienzo; si el gesto empezó sobre la selección, es `pinchItems` y escala y rota los ítems. Zoom acotado entre 0,02× y 40×.
 - **Transacciones**: cada modo que muta abre la transacción al empezar y la cierra al soltar; `pointercancel` la cancela y restaura.
 - **Ajuste a la cuadrícula**: se aplica sobre la caja de la selección, no sobre cada ítem, así el conjunto engancha sin deformarse.

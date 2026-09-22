@@ -158,6 +158,7 @@ export const en: Record<keyof typeof es, string> = {
   ui_thumbnails: 'Generate thumbnails on save',
   ui_autosave: 'Autosave',
   ui_pencil_pressure: 'Apple Pencil: pressure-sensitive width',
+  ui_pencil_always_draws: 'The pencil always draws (the finger selects and pans)',
   ui_pencil_only_draw: 'In draw mode, finger pans the canvas',
   ui_ai_section: 'Artificial intelligence (optional)',
   ui_ai_key: 'Anthropic API key',

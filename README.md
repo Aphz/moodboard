@@ -1,8 +1,8 @@
 # Moodboard
 
-Tablero de referencias visuales tipo [PureRef](https://www.pureref.com/) para iPad y iPhone.
-Lienzo infinito con imágenes, notas, dibujos, grupos y organización automática, pensado
-desde el primer día para dedo y Apple Pencil, no para mouse y ventanas.
+Tablero de referencias visuales para iPad y iPhone. Lienzo infinito con imágenes, notas,
+dibujos, grupos y organización automática, pensado desde el primer día para dedo y Apple
+Pencil, no para mouse y ventanas.
 
 Es una PWA en TypeScript + Vite + Canvas 2D, envuelta con Capacitor para publicarse en la
 App Store. Todo funciona sin conexión y sin backend: las escenas y los bitmaps viven en
@@ -92,15 +92,15 @@ mapeada al grosor del trazo) y el dedo sigue moviendo el lienzo. Ambas cosas se 
 desactivar en Ajustes (*grosor por presión* y *en modo dibujo, el dedo mueve el lienzo*).
 Herramientas de trazo: lápiz, línea, flecha, rectángulo y elipse, con color, grosor y opacidad.
 
-El gizmo de transformación y las barras se ocultan mientras dura una transformación, igual
-que PureRef 2.1.
+El gizmo de transformación y las barras se ocultan mientras dura una transformación, para
+no tapar lo que se está moviendo.
 
 ## Resumen de funciones
 
 - **Lienzo infinito** con zoom de 0,02× a 40×, color de fondo configurable (incluido transparente) y cuadrícula opcional con ajuste (`G` / `⇧G`).
 - **Imágenes**: importar desde archivos, portapapeles, URL o arrastrar y soltar; optimización automática al importar (lado máximo y calidad configurables); recorte con gizmo y bloqueo de proporción; reemplazar imagen; voltear, rotar y escalar.
 - **Notas** con markdown ligero (negrita, cursiva, viñetas, enlaces), tamaño, color, fondo, alineación y alto automático.
-- **Dibujo** con lápiz, línea, flecha, rectángulo y elipse; presión de Apple Pencil; opacidad por dibujo.
+- **Dibujo** con lápiz, línea, flecha, rectángulo y elipse; presión de Apple Pencil; opacidad por dibujo. El Pencil dibuja directamente, sin cambiar de herramienta (el dedo sigue seleccionando y moviendo el lienzo), los trazos seguidos y cercanos se acumulan en una sola anotación, y mientras trazas la escena se congela para que el trazo no se atrase.
 - **Jerarquía**: grupos y relación padre/hijo (`⌘G`, `P`), panel de árbol con búsqueda, visibilidad, bloqueo e indicador de recorte.
 - **Organizar**: collage en columnas (las apaisadas a doble ancho, con el aire que elijas), óptimo (empaquetado por estanterías), cuadrícula, fila, columna, aleatorio y por color; normalizar tamaño y área; alinear, distribuir y apilar.
 - **Símbolos, ornamentos y conectores**: signos sueltos acordes al mood del tablero, puestos en los claros sin tapar imágenes, y flechas entre referencias. Funciona sin clave API; con ella, la IA propone el mood y su repertorio.
@@ -114,8 +114,7 @@ que PureRef 2.1.
 - **Duplicados y similares** por hash perceptual (dHash de 64 bits), sin IA ni red.
 - **Interfaz en español e inglés**, con detección automática del idioma del sistema.
 
-La tabla completa, comparada función por función con PureRef 2.1.x, está en
-[docs/FEATURES.md](docs/FEATURES.md).
+El catálogo completo, función por función, está en [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Funciones IA (opcionales)
 
@@ -187,6 +186,6 @@ docs/                  esta documentación
 
 ## Documentación
 
-- [docs/FEATURES.md](docs/FEATURES.md) — PureRef función por función y qué hace esta app.
+- [docs/FEATURES.md](docs/FEATURES.md) — catálogo de funciones, función por función.
 - [docs/IOS.md](docs/IOS.md) — empaquetar con Capacitor, firmar, TestFlight y probar en el iPad sin Mac.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — módulos, modelo de datos, render, gestos y pruebas.

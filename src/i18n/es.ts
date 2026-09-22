@@ -156,6 +156,7 @@ export const es = {
   ui_thumbnails: 'Generar miniaturas al guardar',
   ui_autosave: 'Guardado automático',
   ui_pencil_pressure: 'Apple Pencil: grosor por presión',
+  ui_pencil_always_draws: 'El lápiz dibuja siempre (el dedo selecciona y mueve el lienzo)',
   ui_pencil_only_draw: 'En modo dibujo, el dedo mueve el lienzo',
   ui_ai_section: 'Inteligencia artificial (opcional)',
   ui_ai_key: 'Clave API de Anthropic',

@@ -20,6 +20,12 @@ export interface AppSettings {
   pencilPressure: boolean;
   /** Sólo Apple Pencil dibuja cuando está el modo dibujo (dedo hace pan) */
   pencilOnlyDraw: boolean;
+  /**
+   * El Apple Pencil dibuja siempre, sin entrar antes en modo dibujo (el dedo
+   * sigue seleccionando y moviendo el lienzo). Sin esto, trazar sobre una
+   * imagen la seleccionaba.
+   */
+  pencilAlwaysDraws: boolean;
   /** Clave API opcional para funciones IA (se guarda sólo en este dispositivo) */
   aiApiKey: string;
   /** Modelo de Claude a usar; si no está en la tabla de precios se usa el por defecto */
@@ -64,6 +70,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autosaveMs: 5000,
   pencilPressure: true,
   pencilOnlyDraw: true,
+  pencilAlwaysDraws: true,
   aiApiKey: '',
   // Haiku 4.5: el modelo más barato de la tabla de src/ai/pricing.ts (DEFAULT_AI_MODEL).
   aiModel: 'claude-haiku-4-5',

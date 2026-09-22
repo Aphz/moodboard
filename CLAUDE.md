@@ -1,8 +1,8 @@
 # Moodboard: guía para agentes
 
-App de moodboard tipo PureRef para iPhone e iPad (PWA, luego Capacitor). El
-código, los comentarios, los textos de la interfaz y las respuestas al usuario
-van en **español de Chile: nunca voseo ni acento argentino o uruguayo**.
+App de moodboard para iPhone e iPad (PWA, luego Capacitor). El código, los
+comentarios, los textos de la interfaz y las respuestas al usuario van en
+**español de Chile: nunca voseo ni acento argentino o uruguayo**.
 
 ## Comandos
 
@@ -26,7 +26,7 @@ Antes de dar por terminado cualquier cambio: lint, tests y build limpios.
 - `src/sync/` sincronización con Google Drive del usuario (sin servidor).
 - `src/ui/` diálogos y barras; `src/render/` Canvas 2D; `src/input/` gestos.
 - `src/i18n/es.ts` y `en.ts`: **cada clave nueva va en los dos**.
-- `docs/` FEATURES (tabla vs. PureRef), SYNC, PINTEREST, IOS, ARCHITECTURE.
+- `docs/` FEATURES (catálogo de funciones), SYNC, PINTEREST, IOS, ARCHITECTURE.
 
 ## Reglas de trabajo
 

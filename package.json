@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Moodboard: tablero de referencias tipo PureRef para iPhone e iPad (PWA + Capacitor)",
+  "description": "Moodboard: tablero de referencias visuales para iPhone e iPad (PWA + Capacitor)",
   "scripts": {
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",

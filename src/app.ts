@@ -54,6 +54,7 @@ import { copyBlobToSystemClipboard, copyItems, duplicateItems, hasInternalClip, 
 import { exportSceneFile, importSceneFile, inspectZip, sceneFileName } from './features/sceneFile';
 import { findDuplicateGroups, findSimilar } from './features/phash';
 import { centerPoints, chainConnectors, defaultOrnamentSize, inkColor } from './features/ornaments';
+import { continuesDrawing, pointsBounds, type InkAnchor } from './features/ink';
 import { recenterOnResize, shouldRefit } from './features/viewport';
 import { isImageFile, isZipFile } from './features/imageTools';
 import { getBlob } from './core/persistence';
@@ -91,6 +92,8 @@ export class App {
   private pendingImportParent: ItemId | null = null;
   /** Hasta cuándo (ms) la próxima importación lanza «IA: organizar por categorías». */
   private organizeAfterImportUntil = 0;
+  /** Último dibujo al que se añadió un trazo, para acumular la escritura a mano. */
+  private inkAnchor: InkAnchor | null = null;
 
   constructor() {
     this.renderer = new Renderer(this.canvas, this.store);
@@ -481,9 +484,23 @@ export class App {
     else void showCommentDialog(this, it);
   }
 
+  /**
+   * Trazo terminado.
+   *
+   * Los trazos seguidos y cercanos se acumulan en el mismo dibujo (una
+   * anotación, una palabra escrita a mano) y los lejanos abren uno nuevo. Antes
+   * se pegaban al ítem que estuviera seleccionado, así que un trazo al otro
+   * lado del tablero entraba en la misma anotación y su caja crecía sin
+   * sentido. Tampoco se selecciona lo dibujado: el marco y sus tiradores
+   * aparecían justo donde se iba a escribir la letra siguiente, y el toque
+   * terminaba escalando el trazo anterior en vez de escribir.
+   */
   private commitStroke(stroke: Stroke, origin: Point) {
-    const roots = this.roots();
-    const existing = roots.length === 1 && roots[0].kind === 'drawing' && !roots[0].locked ? (roots[0] as DrawingItem) : null;
+    const now = Date.now();
+    const scenePoints = stroke.points.map((p) => ({ x: origin.x + p.x, y: origin.y + p.y }));
+    const box = pointsBounds(scenePoints, stroke.width / 2);
+    const anchorItem = this.inkAnchor && continuesDrawing(this.inkAnchor, box, now) ? this.store.get(this.inkAnchor.id) : undefined;
+    const existing = anchorItem?.kind === 'drawing' && !anchorItem.locked ? anchorItem : null;
     this.store.commit(() => {
       if (existing) {
         // convertir puntos de escena a locales del dibujo existente
@@ -496,6 +513,7 @@ export class App {
           it.strokes.push({ ...stroke, width: stroke.width / it.scale, points: localPts });
           this.recenterDrawing(it);
         });
+        this.inkAnchor = { id: existing.id, box: unionRects([this.inkAnchor!.box, box]) ?? box, at: now };
         return;
       }
       const parent = this.autoParentTarget();
@@ -503,7 +521,7 @@ export class App {
       d.strokes.push(stroke);
       this.recenterDrawing(d);
       this.store.addItem(d);
-      this.store.select([d.id]);
+      this.inkAnchor = { id: d.id, box, at: now };
     });
   }
 
