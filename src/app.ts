@@ -30,7 +30,7 @@ import { appSettings, loadAppSettings, updateAppSettings, onSettingsChange } fro
 import { deleteScene, getKV, listScenes, loadScene, putBlob, requestPersistence, saveScene, setKV } from './core/persistence';
 import { Renderer, renderToCanvas, screenToScene, strokesBounds } from './render/renderer';
 import { onBitmapReady, ensureBitmaps } from './render/imageCache';
-import { GestureController, type Tool } from './input/gestures';
+import { GestureController, type ReparentInfo, type Tool } from './input/gestures';
 import { t, setLanguage, detectLanguage } from './i18n';
 import {
   alignItems,
@@ -99,7 +99,8 @@ export class App {
       onEditItem: (id) => this.editItem(id),
       onStrokeEnd: (s, o) => this.commitStroke(s, o),
       onCropChange: () => this.renderer.requestDraw(),
-      onToolChange: (tool) => this.onToolChange(tool)
+      onToolChange: (tool) => this.onToolChange(tool),
+      onReparent: (info) => this.onReparent(info)
     });
   }
 
@@ -157,9 +158,12 @@ export class App {
     const prev = this.gestures.viewSize();
     const before = this.store.scene.viewport;
     const bounds = this.gestures.contentBounds();
-    const refit = prev.w > 0 && shouldRefit(bounds, before, prev, this.gestures.viewInsets());
+    const insets = this.gestures.viewInsets();
+    const refit = prev.w > 0 && shouldRefit(bounds, before, prev, insets);
 
     this.renderer.resize();
+    // los rótulos flotantes se recortan con estas franjas
+    this.renderer.insets = this.gestures.viewInsets();
 
     const next = this.gestures.viewSize();
     if (prev.w <= 0 || prev.h <= 0 || (prev.w === next.w && prev.h === next.h)) return;
@@ -367,6 +371,41 @@ export class App {
     this.exitCrop();
     if (this.gestures.tool === 'draw') this.gestures.setTool('select');
     closeMenus();
+  }
+
+  /**
+   * Un arrastre cambió de grupo lo que se movía. Se dice qué pasó y se ofrece
+   * deshacerlo ahí mismo: sin esto, la imagen «se va» a otra categoría y no
+   * queda claro cómo devolverla.
+   */
+  private onReparent(info: ReparentInfo) {
+    const key =
+      info.kind === 'into'
+        ? 'ui_moved_into'
+        : info.kind === 'attach'
+          ? 'ui_moved_attach'
+          : info.name
+            ? 'ui_moved_out'
+            : 'ui_moved_out_many';
+    const text = t(key, { name: info.name }) + (info.count > 1 ? ` · ${t('ui_moved_count', { count: info.count })}` : '');
+    // El botón deshace SU paso, no el último: si entretanto pasa otra cosa, el
+    // aviso se cierra en vez de revertir algo que el usuario no anunció.
+    const step = this.store.historyLength;
+    const tt = toast(text, {
+      ms: 6000,
+      action: {
+        label: t('cmd_undo'),
+        run: () => {
+          if (this.store.historyLength === step) this.store.undo();
+        }
+      }
+    });
+    const off = this.store.subscribe((e) => {
+      if (e.type !== 'history' || this.store.historyLength === step) return;
+      off();
+      tt.close();
+    });
+    window.setTimeout(off, 6500);
   }
 
   private onToolChange(tool: Tool) {

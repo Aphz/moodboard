@@ -145,6 +145,14 @@ export class Store {
     }
   }
 
+  /**
+   * Cuántos pasos de historial hay acumulados. Sirve para saber si «deshacer»
+   * seguiría deshaciendo el paso que alguien anunció (un aviso, por ejemplo).
+   */
+  get historyLength() {
+    return this.undoStack.length;
+  }
+
   get canUndo() {
     return this.undoStack.length > 0;
   }

@@ -136,6 +136,17 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 | Separación de alineación (padding) configurable | ✅ | `scene.settings.alignPadding`, en Ajustes |
 | Alinear con padding 0 sin dejar huecos (fix 2.1.3) | ✅ | `alignItems()` con `padding` 0 no reordena ni separa |
 
+## Selección y arrastre entre categorías
+
+| PureRef | Estado | Detalle |
+|---|---|---|
+| Tocar para seleccionar | ✅ | La hoja primero: tocar una imagen selecciona la imagen aunque esté dentro de un grupo, y volver a tocarla sube al grupo (y al siguiente, si hay anidados). `src/features/selection.ts` |
+| Arrastrar lo tocado | ➕ | Un arrastre mueve lo que ya estaba seleccionado en esa rama (un grupo seleccionado se mueve entero) y, si no había nada, la imagen tocada. Subir al grupo es sólo cosa de los toques |
+| Mover entre grupos arrastrando | ➕ | Sobre el destino aparece su caja en amarillo con un relleno tenue y el rótulo **Soltar en «X»** / **Adjuntar a «X»**; al sacar algo de su grupo, **Sacar de «X»** |
+| Deshacer el cambio de grupo | ➕ | Al soltar, un aviso dice dónde quedó y trae un botón **Deshacer**: el movimiento y el cambio de grupo son un único paso de historial |
+| Sacar algo de su grupo | ➕ | La caja del grupo se mide sin contar lo que se arrastra, así que soltar fuera del resto de la categoría saca el ítem (antes la caja seguía al dedo y el grupo se lo quedaba siempre) |
+| Lazo | ✅ | `tool_lasso` selecciona los ítems que toca, sin subir a sus grupos |
+
 ## Encuadre y rotación
 
 | PureRef | Estado | Detalle |

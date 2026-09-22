@@ -204,14 +204,33 @@ export interface ToastHandle {
   close(): void;
 }
 
-export function toast(message: string, opts: { error?: boolean; ms?: number; spinner?: boolean } = {}): ToastHandle {
-  const el = h('div', { class: `toast${opts.error ? ' error' : ''}` }, opts.spinner ? h('div', { class: 'spin' }) : null, h('span', null, message));
+export function toast(
+  message: string,
+  opts: { error?: boolean; ms?: number; spinner?: boolean; action?: { label: string; run: () => void } } = {}
+): ToastHandle {
+  // el botón permite deshacer lo que acaba de pasar sin ir a buscar el comando
+  const button = opts.action ? h('button', { class: 'toast-action' }, opts.action.label) : null;
+  const el = h(
+    'div',
+    { class: `toast${opts.error ? ' error' : ''}` },
+    opts.spinner ? h('div', { class: 'spin' }) : null,
+    h('span', null, message),
+    button
+  );
   toastRoot().appendChild(el);
   let timer = 0;
   const close = () => {
     clearTimeout(timer);
     el.remove();
   };
+  if (button && opts.action) {
+    const run = opts.action.run;
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      close();
+      run();
+    });
+  }
   if (!opts.spinner) timer = window.setTimeout(close, opts.ms ?? 2600);
   el.addEventListener('click', close);
   return {

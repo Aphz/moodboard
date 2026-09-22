@@ -27,8 +27,10 @@ import {
 } from '../core/model';
 import type { Store } from '../core/store';
 import { appSettings } from '../core/settings';
+import { t } from '../i18n';
 import { HANDLE_SIZE, screenToScene, type HandleId, type Renderer } from '../render/renderer';
 import { snapToGrid } from '../features/arrange';
+import { acceptsDrop, ancestorChain, dropTarget, remainingBounds, selectionCycle } from '../features/selection';
 import { MAX_ZOOM, MIN_ZOOM, fitViewport, type Insets } from '../features/viewport';
 
 export type Tool = 'select' | 'pan' | 'lasso' | 'draw' | 'crop';
@@ -40,12 +42,24 @@ export interface DrawSettings {
   opacity: number;
 }
 
+/** Qué pasó con el emparentado al terminar un arrastre. */
+export interface ReparentInfo {
+  /** `into`: entró a un grupo · `attach`: quedó colgado de una imagen · `out`: salió de su grupo. */
+  kind: 'into' | 'attach' | 'out';
+  /** Nombre del grupo (o de la imagen) involucrado. */
+  name: string;
+  /** Cuántos ítems cambiaron de padre. */
+  count: number;
+}
+
 export interface GestureCallbacks {
   onContextMenu(screen: Point, itemId: ItemId | null): void;
   onEditItem(id: ItemId): void;
   onStrokeEnd(stroke: Stroke, originScene: Point): void;
   onCropChange(): void;
   onToolChange(tool: Tool): void;
+  /** Un arrastre cambió el padre de algo: el llamador lo cuenta y ofrece deshacer. */
+  onReparent(info: ReparentInfo): void;
 }
 
 type PointerInfo = { id: number; x: number; y: number; sx: number; sy: number; type: string; t: number };
@@ -78,7 +92,8 @@ export class GestureController {
 
   private pointers = new Map<number, PointerInfo>();
   private mode: Mode = { kind: 'none' };
-  private lastTap: { t: number; x: number; y: number; id: ItemId | null } | null = null;
+  /** Último toque: dónde, sobre qué hoja y qué seleccionó (para el ciclo de la rama). */
+  private lastTap: { t: number; x: number; y: number; id: ItemId | null; picked: ItemId | null } | null = null;
   private inTx = false;
 
   constructor(
@@ -119,8 +134,12 @@ export class GestureController {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  /** Ítem más alto bajo el punto (escena). Devuelve el ítem "seleccionable" (grupo raíz si aplica). */
-  hitItem(scene: Point, opts: { ignore?: Set<ItemId>; raw?: boolean } = {}): Item | null {
+  /**
+   * Ítem más alto bajo el punto (en coordenadas de escena). Devuelve siempre
+   * la HOJA; quién decide si se actúa sobre ella o sobre su grupo es
+   * `tap` (ciclo de la rama) o `pickForAction` (arrastre y menús).
+   */
+  hitItem(scene: Point, opts: { ignore?: Set<ItemId> } = {}): Item | null {
     const s = this.store.scene;
     const order = renderOrder(s);
     const hiddenSub = new Set<ItemId>();
@@ -129,36 +148,20 @@ export class GestureController {
       const it = order[i];
       if (it.kind === 'group' || !it.visible || hiddenSub.has(it.id) || opts.ignore?.has(it.id)) continue;
       if (!hitTest(it, scene)) continue;
-      if (opts.raw) return it;
-      return this.selectableFor(it);
+      return it;
     }
     return null;
   }
 
   /**
-   * Regla de selección profunda: si el ítem está dentro de un grupo, se
-   * selecciona el grupo de nivel más alto que no esté ya seleccionado
-   * (o cuyo padre no esté seleccionado). Tocar dentro de un grupo ya
-   * seleccionado selecciona el ítem interior.
+   * Sobre qué actúa un arrastre o un menú: si algo de la rama del ítem tocado
+   * ya estaba seleccionado, eso (así un grupo seleccionado se mueve entero);
+   * si no, la hoja. Subir al grupo es cosa de los toques, no de las acciones:
+   * aplicado al arrastre, mover una imagen movía su categoría completa.
    */
-  private selectableFor(it: Item): Item {
-    const chain: Item[] = [];
-    let cur: Item | undefined = it;
-    while (cur) {
-      chain.push(cur);
-      cur = cur.parentId ? this.store.get(cur.parentId) : undefined;
-    }
-    // chain[0] = ítem, chain[n-1] = ancestro raíz
-    const groups = chain.filter((c) => c.kind === 'group');
-    if (groups.length === 0) return it;
-    // el grupo más alto cuyo ancestro no esté seleccionado y que no esté seleccionado él mismo
-    for (let i = chain.length - 1; i >= 1; i--) {
-      const g = chain[i];
-      if (g.kind !== 'group') continue;
-      if (this.store.selection.has(g.id)) continue; // ya seleccionado → bajar un nivel
-      return g;
-    }
-    return it;
+  private pickForAction(leaf: Item): Item {
+    const chain = ancestorChain(leaf, (id) => this.store.get(id));
+    return chain.find((c) => this.store.selection.has(c.id)) ?? leaf;
   }
 
   private handleAt(p: Point): HandleId | null {
@@ -200,6 +203,7 @@ export class GestureController {
     this.renderer.overlay.hideGizmo = false;
     this.renderer.overlay.lasso = null;
     this.renderer.overlay.hoverId = null;
+    this.renderer.overlay.hoverLabel = null;
     this.renderer.overlay.liveStroke = null;
     this.renderer.overlay.interacting = false;
   }
@@ -237,7 +241,8 @@ export class GestureController {
 
     // clic derecho / botón central
     if (isMouse && e.button === 2) {
-      const hit = this.hitItem(scene);
+      const raw = this.hitItem(scene);
+      const hit = raw ? this.pickForAction(raw) : null;
       if (hit && !this.store.selection.has(hit.id)) this.store.select([hit.id]);
       this.cb.onContextMenu(p, hit?.id ?? null);
       this.pointers.delete(e.pointerId);
@@ -287,16 +292,21 @@ export class GestureController {
       return;
     }
 
-    // ítem o vacío → pendiente hasta saber si es toque, arrastre o pulsación larga
-    const hit = this.hitItem(scene);
+    // ítem o vacío → pendiente hasta saber si es toque, arrastre o pulsación larga.
+    // Se guardan las dos lecturas: la de selección (que sube al grupo al
+    // repetir el toque) y la hoja, que es la que manda al arrastrar.
+    const raw = this.hitItem(scene);
     const timer = window.setTimeout(() => {
       if (this.mode.kind !== 'pending') return;
       this.mode = { kind: 'none' };
-      if (hit && !this.store.selection.has(hit.id)) this.store.select([hit.id]);
+      // la pulsación larga actúa sobre lo que se tocó (o sobre la selección que
+      // ya lo incluía), no sobre el grupo: el menú debe hablar de lo tocado
+      const forMenu = raw ? this.pickForAction(raw) : null;
+      if (forMenu && !this.store.selection.has(forMenu.id)) this.store.select([forMenu.id]);
       if (navigator.vibrate) navigator.vibrate(8);
-      this.cb.onContextMenu(p, hit?.id ?? null);
+      this.cb.onContextMenu(p, forMenu?.id ?? null);
     }, LONG_PRESS_MS);
-    this.mode = { kind: 'pending', target: hit?.id ?? null, timer };
+    this.mode = { kind: 'pending', target: raw?.id ?? null, timer };
   };
 
   private onMove = (e: PointerEvent) => {
@@ -387,9 +397,11 @@ export class GestureController {
           const v = this.store.scene.viewport;
           const sr: Rect = { x: (l.x - v.x) / v.zoom, y: (l.y - v.y) / v.zoom, w: l.w / v.zoom, h: l.h / v.zoom };
           const ids: ItemId[] = [];
+          // el lazo toma lo que toca, tal cual: escalar a los grupos aquí haría
+          // que el resultado dependiera de lo que ya estaba seleccionado
           for (const it of this.store.scene.items) {
             if (it.kind === 'group' || !it.visible) continue;
-            if (rectsIntersect(sr, itemBounds(it))) ids.push(this.selectableFor(it).id);
+            if (rectsIntersect(sr, itemBounds(it))) ids.push(it.id);
           }
           this.store.select([...new Set(ids)], m.additive ? 'add' : 'replace');
         }
@@ -448,6 +460,7 @@ export class GestureController {
     else {
       this.renderer.overlay.lasso = null;
       this.renderer.overlay.hoverId = null;
+      this.renderer.overlay.hoverLabel = null;
       this.renderer.overlay.hideGizmo = false;
     }
     this.renderer.requestDraw();
@@ -470,29 +483,49 @@ export class GestureController {
   // ---------------------------------------------------------------------
   // toque / doble toque
 
-  private tap(target: ItemId | null, p: Point, e: PointerEvent) {
+  /**
+   * Toque simple sobre la hoja que hay bajo el dedo.
+   *
+   * Repetir el toque en el mismo sitio sube por la rama (imagen → categoría →
+   * grupo de más afuera → imagen otra vez), y el ciclo se guía por lo que
+   * eligió el toque anterior, no por la selección: el toque la reemplaza, así
+   * que mirándola el ciclo no pasaba del segundo nivel.
+   */
+  private tap(rawId: ItemId | null, p: Point, e: PointerEvent) {
     const now = performance.now();
     const additive = this.multiSelect || e.shiftKey || e.metaKey || e.ctrlKey;
-    const isDouble =
-      this.lastTap && now - this.lastTap.t < DOUBLE_TAP_MS && Math.hypot(p.x - this.lastTap.x, p.y - this.lastTap.y) < 24 && this.lastTap.id === target;
-    this.lastTap = { t: now, x: p.x, y: p.y, id: target };
+    const sameSpot =
+      !!this.lastTap && Math.hypot(p.x - this.lastTap.x, p.y - this.lastTap.y) < 24 && this.lastTap.id === rawId;
+    const isDouble = sameSpot && now - this.lastTap!.t < DOUBLE_TAP_MS;
+    const prev = sameSpot ? this.lastTap!.picked : null;
     if (isDouble) {
       this.lastTap = null;
-      if (target) {
-        this.store.select([target]);
-        this.cb.onEditItem(target);
+      if (rawId) {
+        // doble toque: edita la hoja, no su grupo
+        this.store.select([rawId]);
+        this.cb.onEditItem(rawId);
       } else {
         // doble toque en vacío: ajustar todo a la vista
         this.fitToView();
       }
       return;
     }
-    if (target) {
-      // grupos: si ya estaba seleccionado el grupo, el segundo toque baja al ítem interno
-      this.store.select([target], additive ? 'toggle' : 'replace');
-    } else if (!additive) {
-      this.store.clearSelection();
+    if (!rawId) {
+      this.lastTap = { t: now, x: p.x, y: p.y, id: null, picked: null };
+      if (!additive) this.store.clearSelection();
+      return;
     }
+    const leaf = this.store.get(rawId);
+    if (!leaf) {
+      this.lastTap = { t: now, x: p.x, y: p.y, id: rawId, picked: null };
+      return;
+    }
+    // en selección múltiple el toque alterna la hoja: subir al grupo dejaría
+    // sin forma de quitar una imagen de la selección
+    const chain = ancestorChain(leaf, (id) => this.store.get(id));
+    const picked = additive ? leaf : selectionCycle(chain, prev) ?? leaf;
+    this.store.select([picked.id], additive ? 'toggle' : 'replace');
+    this.lastTap = { t: now, x: p.x, y: p.y, id: rawId, picked: picked.id };
   }
 
   // ---------------------------------------------------------------------
@@ -501,12 +534,13 @@ export class GestureController {
   private startDrag(target: ItemId | null, info: PointerInfo, e: PointerEvent) {
     const additive = this.multiSelect || e.shiftKey || e.metaKey || e.ctrlKey;
     if (target) {
-      const it = this.store.get(target);
-      if (!it) {
+      const leaf = this.store.get(target);
+      if (!leaf) {
         this.mode = { kind: 'pan' };
         return;
       }
-      if (!this.store.selection.has(target)) this.store.select([target], additive ? 'add' : 'replace');
+      const it = this.pickForAction(leaf);
+      if (!this.store.selection.has(it.id)) this.store.select([it.id], additive ? 'add' : 'replace');
       const roots = this.store.selectedRoots();
       const ids = this.movedIdsFor(roots);
       if (ids.length === 0) {
@@ -557,60 +591,138 @@ export class GestureController {
     const target = this.dropTargetAt(scene, moved);
     m.hover = target?.id ?? null;
     this.renderer.overlay.hoverId = m.hover;
+    this.renderer.overlay.hoverLabel = this.dropLabel(target, m.ids);
   }
 
-  /** Grupo (por caja) o imagen (por impacto) bajo el punto que pueda recibir los ítems movidos. */
-  private dropTargetAt(scene: Point, moved: Set<ItemId>): Item | null {
-    if (!appSettings.dropIntoGroups) return null;
-    const raw = this.hitItem(scene, { ignore: moved, raw: true });
-    if (raw) {
-      // sube hasta el grupo contenedor más externo que no esté siendo movido
-      let cur: Item | undefined = raw;
-      let best: Item | null = raw.kind === 'image' ? raw : null;
-      while (cur?.parentId) {
-        const parent = this.store.get(cur.parentId);
-        if (!parent || moved.has(parent.id)) break;
-        if (parent.kind === 'group') best = parent;
-        cur = parent;
-      }
-      return best;
+  /** Nombre visible de un ítem, con respaldo para los grupos sin nombre. */
+  private itemLabel(it: Item): string {
+    const name = (it.name ?? '').trim();
+    return name || t('ui_drop_group_unnamed');
+  }
+
+  /**
+   * Qué decir mientras se arrastra: a qué grupo va a entrar, a qué imagen se
+   * va a colgar, o de qué grupo va a salir. `null` cuando nada cambia de
+   * padre, para no llenar la pantalla de avisos.
+   */
+  private dropLabel(target: Item | null, movedIds: ItemId[]): string | null {
+    if (target) {
+      const name = this.itemLabel(target);
+      return target.kind === 'group' ? t('ui_drop_into', { name }) : t('ui_drop_attach', { name });
     }
-    // grupos vacíos de impacto: por caja del subárbol
-    for (const g of this.store.scene.items) {
-      if (g.kind !== 'group' || moved.has(g.id) || !g.visible) continue;
-      const b = subtreeBounds(this.store.scene, g.id);
-      if (b && rectContains(b, scene)) return g;
+    const leaving = this.leavingGroup(movedIds);
+    return leaving ? t('ui_drop_out', { name: this.itemLabel(leaving) }) : null;
+  }
+
+  /**
+   * Grupo del que saldría lo que se está moviendo, si se soltara aquí: es el
+   * mismo criterio que aplica `finishMove`, así que el aviso no miente.
+   */
+  private leavingGroup(movedIds: ItemId[]): Item | null {
+    const moved = new Set(movedIds);
+    for (const r of this.store.selectedRoots()) {
+      if (r.locked || !r.parentId) continue;
+      const parent = this.store.get(r.parentId);
+      if (!parent || parent.kind !== 'group') continue;
+      const box = this.groupDropBox(parent.id, moved);
+      const mine = subtreeBounds(this.store.scene, r.id);
+      if (box && mine && !rectsIntersect(box, mine)) return parent;
     }
     return null;
   }
 
+  /**
+   * Caja de un grupo SIN contar lo que se está moviendo.
+   *
+   * `subtreeBounds` incluiría el ítem arrastrado, así que la caja del grupo
+   * seguía al dedo y nunca se podía sacar nada de su propia categoría.
+   * `null` si al grupo no le quedaría contenido visible.
+   */
+  private groupDropBox(groupId: ItemId, moved: Set<ItemId>): Rect | null {
+    return remainingBounds(descendantsOf(this.store.scene, groupId), moved);
+  }
+
+  /** Raíces que se están moviendo y podrían cambiar de padre. */
+  private movingRoots(): Item[] {
+    return this.store.selectedRoots().filter((r) => !r.locked);
+  }
+
+  /**
+   * Grupo (por caja) o imagen (por impacto) bajo el punto que pueda recibir
+   * los ítems movidos.
+   *
+   * Sólo devuelve un destino si de verdad **aceptaría** algo (`acceptsDrop`):
+   * antes se resaltaba la caja y se prometía «Soltar en X» también cuando
+   * soltar no iba a hacer nada, por ejemplo al mover una imagen dentro de su
+   * propia categoría o al dejarla encima de otra imagen.
+   */
+  private dropTargetAt(scene: Point, moved: Set<ItemId>): Item | null {
+    if (!appSettings.dropIntoGroups) return null;
+    const roots = this.movingRoots();
+    const usable = (target: Item | null) => (target && roots.some((r) => acceptsDrop(target, r)) ? target : null);
+
+    const raw = this.hitItem(scene, { ignore: moved });
+    if (raw) return usable(dropTarget(ancestorChain(raw, (id) => this.store.get(id)), moved));
+
+    // sin impacto directo: por la caja de lo que le queda a cada grupo, y entre
+    // los candidatos gana el más chico (el más interno si hay grupos anidados)
+    let best: Item | null = null;
+    let bestArea = Infinity;
+    for (const g of this.store.scene.items) {
+      if (g.kind !== 'group' || moved.has(g.id) || !g.visible) continue;
+      const b = this.groupDropBox(g.id, moved);
+      if (!b || !rectContains(b, scene)) continue;
+      const area = b.w * b.h;
+      if (area < bestArea) {
+        bestArea = area;
+        best = g;
+      }
+    }
+    return usable(best);
+  }
+
   private finishMove(m: Extract<Mode, { kind: 'move' }>) {
     this.renderer.overlay.hoverId = null;
-    const roots = this.store.selectedRoots().filter((r) => !r.locked);
-    if (m.hover) {
-      const target = this.store.get(m.hover);
-      if (target) {
-        const movable = roots.filter((r) => r.id !== target.id);
-        // imágenes sólo se sueltan dentro de grupos; notas/dibujos también sobre imágenes
-        const accepted = movable.filter((r) => target.kind === 'group' || (target.kind === 'image' && r.kind !== 'image' && r.kind !== 'group'));
-        if (accepted.length) this.store.setParent(accepted.map((r) => r.id), target.id);
-      }
+    this.renderer.overlay.hoverLabel = null;
+    const roots = this.movingRoots();
+    let info: ReparentInfo | null = null;
+    const target = m.hover ? this.store.get(m.hover) : undefined;
+    // misma regla que anunció el rótulo durante el arrastre
+    const accepted = target ? roots.filter((r) => acceptsDrop(target, r)) : [];
+    if (target && accepted.length) {
+      this.store.setParent(accepted.map((r) => r.id), target.id);
+      info = {
+        kind: target.kind === 'group' ? 'into' : 'attach',
+        name: this.itemLabel(target),
+        count: accepted.length
+      };
     } else {
       // sacar del grupo si se soltó fuera de su caja
+      let taken = 0;
+      let from: Item | null = null;
+      let mixed = false;
       for (const r of roots) {
         if (!r.parentId) continue;
         const parent = this.store.get(r.parentId);
         if (!parent || parent.kind !== 'group') continue;
-        const others = descendantsOf(this.store.scene, parent.id).filter((d) => !m.ids.includes(d.id) && d.kind !== 'group');
-        const box = unionRects(others.map(itemBounds));
+        const box = this.groupDropBox(parent.id, new Set(m.ids));
         const mine = subtreeBounds(this.store.scene, r.id);
-        if (box && mine && !rectsIntersect(box, mine)) this.store.setParent([r.id], parent.parentId);
+        if (box && mine && !rectsIntersect(box, mine)) {
+          this.store.setParent([r.id], parent.parentId);
+          taken++;
+          if (from && from.id !== parent.id) mixed = true;
+          from ??= parent;
+        }
         if (!box) {
           /* grupo quedaría vacío: mantener */
         }
       }
+      if (taken && from) info = { kind: 'out', name: mixed ? '' : this.itemLabel(from), count: taken };
     }
     this.endTx();
+    // el aviso va después de cerrar la transacción: deshacer devuelve el
+    // movimiento y el cambio de padre en un solo paso
+    if (info) this.cb.onReparent(info);
   }
 
   // ---------------------------------------------------------------------
@@ -717,9 +829,14 @@ export class GestureController {
     const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
     const v = this.store.scene.viewport;
 
-    // ¿gesto sobre la selección? (arrastre en curso o pendiente sobre un ítem seleccionado)
-    const onSelection =
-      (m.kind === 'move') || (m.kind === 'pending' && m.target !== null && this.store.selection.has(m.target));
+    // ¿gesto sobre la selección? (arrastre en curso, o pendiente sobre algo cuya
+    // rama está seleccionada: con la selección de hoja, `m.target` es la imagen)
+    const pendingOnSelection = () => {
+      if (m.kind !== 'pending' || !m.target) return false;
+      const leaf = this.store.get(m.target);
+      return !!leaf && this.store.selection.has(this.pickForAction(leaf).id);
+    };
+    const onSelection = m.kind === 'move' || pendingOnSelection();
     if (onSelection && this.tool !== 'draw' && this.tool !== 'crop') {
       if (m.kind === 'move') {
         // deshacer el desplazamiento parcial para partir limpio
@@ -729,6 +846,7 @@ export class GestureController {
           it.y = s.y;
         });
         this.renderer.overlay.hoverId = null;
+        this.renderer.overlay.hoverLabel = null;
       }
       const roots = this.store.selectedRoots();
       const ids = this.movedIdsFor(roots);

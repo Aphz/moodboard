@@ -13,7 +13,7 @@ transacción → evento → repintado**.
              │     └─ core/model.ts ── tipos, geometría, jerarquía (puro)
              ├─ render/renderer.ts ── Canvas 2D (lee store, nunca lo muta)
              ├─ input/gestures.ts ─── Pointer Events → máquina de modos
-             ├─ features/* ────────── importar, organizar, exportar, archivo, paleta, phash
+             ├─ features/* ────────── importar, organizar, seleccionar, encuadrar, exportar, archivo, paleta, phash
              ├─ ui/* ──────────────── barras, menús, diálogos, jerarquía, paleta de comandos
              └─ core/persistence.ts ─ IndexedDB (scenes, blobs, kv)
 ```
@@ -27,7 +27,7 @@ transacción → evento → repintado**.
 | `core/persistence.ts` | IndexedDB: escenas, bitmaps y clave-valor; GC de bitmaps | No conoce el store |
 | `core/settings.ts` | Preferencias de la app (no de la escena), con suscriptores | Se persisten en el store `kv` |
 | `core/commands.ts` | Registro de comandos, atajos y formateo Apple de los atajos | Sin lógica de negocio |
-| `features/*` | Algoritmos y operaciones: organizar, paleta, phash, importar, exportar, portapapeles, `.moodboard` | `arrange`, `palette` y `phash` son **puros** (y por eso se prueban en jsdom) |
+| `features/*` | Algoritmos y operaciones: organizar, paleta, phash, importar, exportar, portapapeles, `.moodboard`, ornamentos, selección, encuadre | `arrange`, `organize`, `palette`, `phash`, `ornaments`, `selection` y `viewport` son **puros** (y por eso se prueban en jsdom) |
 | `render/*` | Dibujar la escena, cachear bitmaps, maquetar texto | Solo lee del store |
 | `input/gestures.ts` | Traducir Pointer Events a intenciones sobre el store | Abre y cierra transacciones |
 | `ui/*` | DOM: barras, menús contextuales, diálogos, jerarquía, paleta de comandos | Solo invocan comandos o mutan vía store |
@@ -134,7 +134,10 @@ none → pending → { pan | lasso | move | handle | pinch | pinchItems | draw |
 - **Dos dedos**: `pinch` mueve y hace zoom del lienzo; si el gesto empezó sobre la selección, es `pinchItems` y escala y rota los ítems. Zoom acotado entre 0,02× y 40×.
 - **Transacciones**: cada modo que muta abre la transacción al empezar y la cierra al soltar; `pointercancel` la cancela y restaura.
 - **Ajuste a la cuadrícula**: se aplica sobre la caja de la selección, no sobre cada ítem, así el conjunto engancha sin deformarse.
-- **Doble toque** (≤320 ms) llama a `onEditItem`; la **pulsación larga** selecciona lo que haya debajo, vibra y abre el menú contextual.
+- **Qué se selecciona al tocar** (`features/selection.ts`, puro): la **hoja primero**. Tocar una imagen dentro de un grupo la selecciona a ella; repetir el toque en el mismo sitio sube por la rama (imagen → categoría → grupo de más afuera → imagen otra vez). El ciclo se guía por lo que eligió el toque anterior (`lastTap.picked`), no por la selección, porque el toque la reemplaza. En selección múltiple el toque alterna la hoja, para poder quitarla.
+- **Qué se arrastra** (`pickForAction`): si algo de la rama tocada ya estaba seleccionado, eso (un grupo seleccionado se mueve entero); si no, la hoja. Subir al grupo es cosa de los toques: aplicado al arrastre, mover una imagen movía su categoría completa. La pulsación larga, el clic derecho y la pinza de dos dedos usan la misma regla.
+- **Soltar en otro grupo**: `dropTargetAt` busca el destino bajo el puntero (grupo más interno por impacto, o el grupo de caja más chica que contenga el punto) y sólo lo propone si `acceptsDrop` aceptaría algo; el renderizador lo resalta con relleno tenue y un rótulo («Soltar en X», «Adjuntar a X», «Sacar de X»). La caja de un grupo se mide con `remainingBounds`, **sin** contar lo que se arrastra: medida con `subtreeBounds` seguía al dedo y nunca se podía sacar nada de su categoría. El cambio de padre va en la misma transacción que el movimiento, y `onReparent` avisa con un botón de deshacer atado a ese paso del historial (`store.historyLength`).
+- **Doble toque** (≤320 ms) llama a `onEditItem` sobre la hoja; la **pulsación larga** selecciona lo que haya debajo, vibra y abre el menú contextual.
 - Los gestos nativos de pinch de Safari (`gesturestart`/`gesturechange`/`gestureend`) se cancelan para que el zoom de página no compita con el del lienzo.
 
 ## Comandos e i18n
