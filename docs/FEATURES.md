@@ -138,6 +138,7 @@ teclado y Ctrl en escritorio. En pantalla se muestran con símbolos Apple (⌘, 
 | El lápiz dibuja sin cambiar de herramienta | ✅ | Con `pencilAlwaysDraws` (activado), el Apple Pencil traza aunque esté la herramienta de selección: el dedo sigue seleccionando y moviendo el lienzo. Antes había que entrar en modo dibujo y, si no, trazar sobre una imagen la seleccionaba |
 | Escritura a mano en un solo ítem | ✅ | Los trazos seguidos y cercanos se acumulan en el mismo dibujo (`src/features/ink.ts`: 1,5 s de ventana y un margen relativo al trazo); uno lejano o tardío abre otro. Antes se pegaban al ítem seleccionado, viniera de donde viniera |
 | Trazar sin marcos de por medio | ✅ | Lo dibujado no queda seleccionado: el gizmo aparecía justo donde iba la letra siguiente y el toque terminaba escalando el trazo anterior |
+| Seleccionar lo que hay bajo una anotación | ✅ | Un dibujo se toca donde está la tinta, no en toda su caja: entre las letras y en los márgenes el toque pasa a la imagen de abajo (`src/features/strokes.ts`). Antes, como los dibujos se pintan sobre las imágenes, anotar una imagen la dejaba inseleccionable. Un dibujo ya seleccionado sí se agarra de cualquier parte de su caja, para poder arrastrarlo |
 | Trazo fluido con el tablero lleno | ✅ | Mientras el lápiz está apoyado, la escena se congela en una instantánea y cada punto cuesta un `drawImage` más el trazo (medido con 24 imágenes y 12 notas: 1,04 ms → 0,09 ms por fotograma) |
 
 ## Selección y arrastre entre categorías

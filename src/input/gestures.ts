@@ -14,6 +14,7 @@ import {
   hitTest,
   itemBounds,
   renderOrder,
+  sceneToLocal,
   rectContains,
   rectsIntersect,
   subtreeBounds,
@@ -30,6 +31,7 @@ import { appSettings } from '../core/settings';
 import { t } from '../i18n';
 import { HANDLE_SIZE, screenToScene, type HandleId, type Renderer } from '../render/renderer';
 import { snapToGrid } from '../features/arrange';
+import { STROKE_SLOP, strokesHit } from '../features/strokes';
 import { acceptsDrop, ancestorChain, dropTarget, remainingBounds, selectionCycle } from '../features/selection';
 import { MAX_ZOOM, MIN_ZOOM, fitViewport, type Insets } from '../features/viewport';
 
@@ -135,6 +137,27 @@ export class GestureController {
   }
 
   /**
+   * ¿Toca el punto a este ítem?
+   *
+   * Para todo lo que tiene cuerpo (imágenes, notas) basta su caja. Un dibujo
+   * NO: su caja envuelve los trazos y la tinta ocupa una parte mínima de
+   * ella, así que medirlo por la caja hacía que cualquier anotación tapara la
+   * imagen que hay debajo —y los dibujos se pintan siempre por encima—. Ahí
+   * se mide la distancia real a los trazos, con una holgura para el dedo.
+   *
+   * La excepción es un dibujo YA seleccionado: ahí manda la caja, para poder
+   * arrastrarlo agarrándolo de cualquier parte y no sólo de la tinta.
+   */
+  private hits(it: Item, scene: Point): boolean {
+    if (!hitTest(it, scene)) return false;
+    if (it.kind !== 'drawing' || this.store.selection.has(it.id)) return true;
+    const zoom = this.store.scene.viewport.zoom;
+    // la holgura va en píxeles de pantalla: no cambia al alejar o acercar
+    const slop = STROKE_SLOP / Math.max(0.0001, zoom * it.scale);
+    return strokesHit(it.strokes, sceneToLocal(it, scene), slop);
+  }
+
+  /**
    * Ítem más alto bajo el punto (en coordenadas de escena). Devuelve siempre
    * la HOJA; quién decide si se actúa sobre ella o sobre su grupo es
    * `tap` (ciclo de la rama) o `pickForAction` (arrastre y menús).
@@ -147,7 +170,7 @@ export class GestureController {
     for (let i = order.length - 1; i >= 0; i--) {
       const it = order[i];
       if (it.kind === 'group' || !it.visible || hiddenSub.has(it.id) || opts.ignore?.has(it.id)) continue;
-      if (!hitTest(it, scene)) continue;
+      if (!this.hits(it, scene)) continue;
       return it;
     }
     return null;
