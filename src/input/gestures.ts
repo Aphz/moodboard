@@ -139,22 +139,36 @@ export class GestureController {
   /**
    * ¿Toca el punto a este ítem?
    *
-   * Para todo lo que tiene cuerpo (imágenes, notas) basta su caja. Un dibujo
-   * NO: su caja envuelve los trazos y la tinta ocupa una parte mínima de
-   * ella, así que medirlo por la caja hacía que cualquier anotación tapara la
-   * imagen que hay debajo —y los dibujos se pintan siempre por encima—. Ahí
-   * se mide la distancia real a los trazos, con una holgura para el dedo.
+   * Para lo que tiene cuerpo —una imagen, una nota con fondo— basta su caja.
+   * Para lo que se ve a través, no: los dibujos y las notas se pintan SIEMPRE
+   * por encima de las imágenes, así que su parte vacía se llevaba los toques
+   * de lo que hubiera debajo y anotar una imagen la dejaba inseleccionable.
    *
-   * La excepción es un dibujo YA seleccionado: ahí manda la caja, para poder
-   * arrastrarlo agarrándolo de cualquier parte y no sólo de la tinta.
+   * - **dibujo**: distancia real a sus trazos (`features/strokes.ts`);
+   * - **nota transparente**: la caja de sus letras, no la del ítem
+   *   (`features/noteText.ts`), que es lo que arregla los ornamentos.
+   *
+   * En ambos casos con una holgura para el dedo. Lo YA seleccionado vuelve a
+   * medirse por su caja, para poder arrastrarlo agarrándolo de cualquier
+   * parte y no sólo de la tinta o de las letras.
    */
   private hits(it: Item, scene: Point): boolean {
     if (!hitTest(it, scene)) return false;
-    if (it.kind !== 'drawing' || this.store.selection.has(it.id)) return true;
+    // lo ya seleccionado manda con su caja: si no, sólo se podría arrastrar
+    // agarrándolo de la tinta o de las letras
+    if (this.store.selection.has(it.id)) return true;
     const zoom = this.store.scene.viewport.zoom;
     // la holgura va en píxeles de pantalla: no cambia al alejar o acercar
     const slop = STROKE_SLOP / Math.max(0.0001, zoom * it.scale);
-    return strokesHit(it.strokes, sceneToLocal(it, scene), slop);
+    const local = sceneToLocal(it, scene);
+    if (it.kind === 'drawing') return strokesHit(it.strokes, local, slop);
+    if (it.kind === 'note' && it.background === 'transparent') {
+      const box = this.renderer.noteTextBox(it);
+      // sin medida todavía (nunca se ha pintado): no quitarle nada
+      if (!box) return true;
+      return rectContains({ x: box.x - slop, y: box.y - slop, w: box.w + slop * 2, h: box.h + slop * 2 }, local);
+    }
+    return true;
   }
 
   /**

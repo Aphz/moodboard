@@ -25,6 +25,7 @@ import {
 import type { Store } from '../core/store';
 import { getBitmap, isFailed } from './imageCache';
 import { fontString, layoutText, type TextLine } from './text';
+import { noteTextBox } from '../features/noteText';
 
 export const HANDLE_SIZE = 14; // px CSS
 export const ROTATE_HANDLE_OFFSET = 36;
@@ -403,6 +404,19 @@ export class Renderer {
     }
     if (it.autoHeight && Math.abs(it.h - height) > 0.5) it.h = height;
     return lines;
+  }
+
+  /**
+   * Caja que ocupan las letras de una nota, en coordenadas locales.
+   *
+   * La usan los gestos para no dejar que una nota transparente se lleve los
+   * toques de lo que tiene debajo. Se apoya en la maqueta que ya está
+   * cacheada para dibujar, así que no mide de nuevo salvo que el texto haya
+   * cambiado.
+   */
+  noteTextBox(it: NoteItem): Rect | null {
+    const lines = this.layoutNote(this.ctx, it);
+    return noteTextBox({ w: it.w, h: it.h, fontSize: it.fontSize, align: it.align, lines });
   }
 
   private drawNote(ctx: CanvasRenderingContext2D, it: NoteItem) {
