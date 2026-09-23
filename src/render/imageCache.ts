@@ -5,8 +5,16 @@
  */
 import { getBlob } from '../core/persistence';
 import { decodeImage } from '../features/imageTools';
+import { MASK_SIZE, makeMask, type AlphaMask } from '../features/alphaMask';
 
-type Entry = { bmp: ImageBitmap | HTMLImageElement | null; loading: boolean; failed: boolean; lastUse: number };
+type Entry = {
+  bmp: ImageBitmap | HTMLImageElement | null;
+  loading: boolean;
+  failed: boolean;
+  lastUse: number;
+  /** Máscara de opacidad, calculada la primera vez que hace falta. */
+  mask?: AlphaMask | null;
+};
 
 const cache = new Map<string, Entry>();
 const listeners = new Set<() => void>();
@@ -36,6 +44,41 @@ export function getBitmap(blobId: string): ImageBitmap | HTMLImageElement | null
 
 export function isFailed(blobId: string): boolean {
   return cache.get(blobId)?.failed ?? false;
+}
+
+/**
+ * Máscara de opacidad de una imagen, o `null` si el bitmap todavía no está.
+ *
+ * Se calcula una sola vez por imagen reduciéndola a una rejilla chica: leer
+ * los pixeles del bitmap completo en cada toque sería carísimo, y para saber
+ * si ahí hay figura o se ve a través la rejilla sobra. El resultado se guarda
+ * junto al bitmap y se va con él.
+ */
+export function getAlphaMask(blobId: string): AlphaMask | null {
+  const e = cache.get(blobId);
+  if (!e?.bmp) return null;
+  if (e.mask !== undefined) return e.mask;
+  e.mask = buildMask(e.bmp);
+  return e.mask;
+}
+
+function buildMask(bmp: ImageBitmap | HTMLImageElement): AlphaMask | null {
+  try {
+    const c = document.createElement('canvas');
+    c.width = MASK_SIZE;
+    c.height = MASK_SIZE;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, MASK_SIZE, MASK_SIZE);
+    ctx.drawImage(bmp as CanvasImageSource, 0, 0, MASK_SIZE, MASK_SIZE);
+    const data = ctx.getImageData(0, 0, MASK_SIZE, MASK_SIZE).data;
+    const cells = new Uint8Array(MASK_SIZE * MASK_SIZE);
+    for (let i = 0; i < cells.length; i++) cells[i] = data[i * 4 + 3]!;
+    return makeMask(cells, MASK_SIZE);
+  } catch {
+    // un canvas contaminado o sin contexto: mejor sin máscara que sin toque
+    return null;
+  }
 }
 
 async function load(blobId: string, entry: Entry) {
