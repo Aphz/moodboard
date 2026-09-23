@@ -23,7 +23,7 @@ import {
   type Viewport
 } from '../core/model';
 import type { Store } from '../core/store';
-import { getBitmap, isFailed } from './imageCache';
+import { getAlphaMask, getBitmap, isFailed } from './imageCache';
 import { fontString, layoutText, type TextLine } from './text';
 import { noteTextBox } from '../features/noteText';
 
@@ -360,8 +360,12 @@ export class Renderer {
         /* bitmap cerrado */
       }
       this.clearShadow(ctx);
-      // borde interior muy sutil: separa la imagen del fondo como una lámina impresa
-      if (!this.exporting) {
+      // Borde interior muy sutil: separa la imagen del fondo como una lámina
+      // impresa. Sobre una imagen con transparencia —un sujeto recortado, un
+      // logo— ese rectángulo queda flotando alrededor de la figura y delata
+      // que no está recortada, así que ahí no va. La sombra sí: el canvas la
+      // calcula sobre el alfa y sale con la forma del sujeto.
+      if (!this.exporting && (getAlphaMask(it.blobId)?.opaque ?? true)) {
         ctx.strokeStyle = 'rgba(255,255,255,0.10)';
         ctx.lineWidth = 1 / (zoom * it.scale);
         ctx.strokeRect(-w / 2 + ctx.lineWidth / 2, -h / 2 + ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth);
